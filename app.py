@@ -1,12 +1,14 @@
-import streamlit as st
-import gspread
-import os
 import json
+import os
+import pandas as pd
+import gspread
+import streamlit as st
 
 # 1. 網頁基本設定 (全寬佈局、暗色科技風)
 st.set_page_config(page_title="ETF 籌碼監控儀表板", layout="wide")
 
 SHEET_NAME = "ETF daily"
+
 
 def get_sheets_client():
     # 優先從 Streamlit Secrets 中讀取憑證
@@ -24,11 +26,12 @@ def get_sheets_client():
             st.error(f"❌ Secrets 中的 GOOGLE_CREDENTIALS JSON 解析失敗: {e}")
 
     # 本地開發備用
-    json_path = os.path.join(os.getcwd(), 'credentials.json')
+    json_path = os.path.join(os.getcwd(), "credentials.json")
     if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             return gspread.service_account_from_dict(json.load(f))
     return None
+
 
 # 初始化 Google Sheets (使用 st.cache_resource 避免重複連線被 Google 封鎖)
 @st.cache_resource
@@ -42,73 +45,122 @@ def init_gspread():
         st.error(f"❌ 雲端試算表連線失敗: {e}")
         return None
 
+
 sh = init_gspread()
 
+
+# 輔助函式：將 Google Sheets 的二維陣列安全轉換為帶有正確 Header 的 Pandas DataFrame
+def sheets_to_df(rows):
+    if not rows or len(rows) == 0:
+        return pd.DataFrame()
+    # 第一列作為欄位名稱，其餘為資料
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    return df
+
+
 if not sh:
-    st.warning("⏳ 等待 Google Sheets 憑證正確注入... 請確保 Secrets 已正確填寫 `GOOGLE_CREDENTIALS`。")
+    st.warning(
+        "⏳ 等待 Google Sheets 憑證正確注入... 請確保 Secrets 已正確填寫 `GOOGLE_CREDENTIALS`。"
+    )
 else:
     st.title("📊 ETF 籌碼動態監控中心")
-    
+
     # 側邊欄：點擊查詢單檔 ETF 明細 (如 00981A)
     st.sidebar.header("🔍 個別 ETF 明細查詢")
-    etf_input = st.sidebar.text_input("輸入 ETF 代號 (如: 00981A):", "").upper().strip()
+    etf_input = (
+        st.sidebar.text_input("輸入 ETF 代號 (如: 00981A):", "").upper().strip()
+    )
     if etf_input:
         # 自動補零防呆機制
-        if len(etf_input) == 4 and etf_input[0].isdigit(): etf_input = f"00{etf_input}"
-        elif len(etf_input) == 5 and etf_input[0].isdigit(): etf_input = f"0{etf_input}"
-            
+        if len(etf_input) == 4 and etf_input[0].isdigit():
+            etf_input = f"00{etf_input}"
+        elif len(etf_input) == 5 and etf_input[0].isdigit():
+            etf_input = f"0{etf_input}"
+
         try:
-            etf_rows = sh.worksheet(etf_input).get_all_values()
+            raw_etf_rows = sh.worksheet(etf_input).get_all_values()
+            df_etf = sheets_to_df(raw_etf_rows)
+
             st.sidebar.success(f"成功開啟 {etf_input} 工作表")
             st.markdown(f"### 📈 {etf_input} 完整持股明細")
-            st.dataframe(etf_rows, use_container_width=True)
+            st.dataframe(df_etf, use_container_width=True, hide_index=True)
         except gspread.exceptions.WorksheetNotFound:
             st.sidebar.error(f"❌ 找不到工作表: '{etf_input}'")
         except Exception as e:
             st.sidebar.error(f"❌ 讀取發生錯誤: {e}")
 
-    # 使用 4 個 Tab 頁籤切換你指定的 5 類工作表內容
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🎨 ETF 異動矩陣", 
-        "🔥 今日英雄榜", 
-        "🎯 籌碼分佈", 
-        "📚 歷史紀錄 (ETF History)"
-    ])
-    
+    # 使用 4 個 Tab 頁籤切換指定的工作表內容
+    tab1, tab2, tab3, tab4 = st.tabs(
+        [
+            "🎨 ETF 異動矩陣",
+            "🔥 今日英雄榜",
+            "🎯 籌碼分佈",
+            "📚 歷史紀錄 (ETF History)",
+        ]
+    )
+
     with tab1:
         st.subheader("每日各 ETF 增減倉純淨異動矩陣")
         try:
-            matrix_data = sh.worksheet("ETF異動矩陣_純淨版").get_all_values()
-            st.table(matrix_data) # Streamlit 會把你的畫布矩陣完美對齊輸出
+            matrix_rows = sh.worksheet("ETF異動矩陣_純淨版").get_all_values()
+            df_matrix = sheets_to_df(matrix_rows)
+
+            if not df_matrix.empty:
+                # 嘗試將數值欄位轉為數字，方便 Streamlit 進行顏色塗裝 (Styler)
+                for col in df_matrix.columns[1:]:  # 假設第一欄是個股名稱/代號
+                    df_matrix[col] = pd.to_numeric(
+                        df_matrix[col], errors="ignore"
+                    )
+
+                # 使用 Styler 為矩陣加上背景漸層（類似熱圖效果），讓增減倉視覺化
+                st.dataframe(
+                    df_matrix.style.background_gradient(
+                        cmap="RdYlGn", axis=None
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("工作表目前無資料")
         except Exception as e:
             st.info("暫時無法讀取『ETF異動矩陣_純淨版』工作表")
 
     with tab2:
         st.subheader("今日異動英雄榜 (Hero_List)")
         try:
-            hero_data = sh.worksheet("Hero_List_美化版").get_all_values()
-            st.dataframe(hero_data, use_container_width=True)
+            hero_rows = sh.worksheet("Hero_List_美化版").get_all_values()
+            df_hero = sheets_to_df(hero_rows)
+            st.dataframe(df_hero, use_container_width=True, hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『Hero_List_美化版』工作表")
 
     with tab3:
         st.subheader("關鍵標的籌碼分佈庫")
         try:
-            chip_data = sh.worksheet("標的籌碼分佈_美化版").get_all_values()
-            st.dataframe(chip_data, use_container_width=True)
+            chip_rows = sh.worksheet("標的籌碼分佈_美化版").get_all_values()
+            df_chip = sheets_to_df(chip_rows)
+
+            # 範例美化：若表格中有「權重」或「籌碼比例」等欄位，可在此處設定進度條顯示
+            # 這裡直接輸出正確 Header 的 DataFrame
+            st.dataframe(df_chip, use_container_width=True, hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『標的籌碼分佈_美化版』工作表")
 
     with tab4:
         st.subheader("ETF History 歷史資料庫 (最新 500 筆)")
         try:
-            history_data = sh.worksheet("ETF History").get_all_values()
-            if len(history_data) > 1:
-                header = history_data[0]
-                rows = history_data[1:]
-                # 倒序排列，讓最新追加的日期在最上面
-                display_rows = [header] + list(reversed(rows[-500:]))
-                st.dataframe(display_rows, use_container_width=True)
+            history_rows = sh.worksheet("ETF History").get_all_values()
+            if len(history_rows) > 1:
+                # 轉成 DataFrame
+                df_history = sheets_to_df(history_rows)
+
+                # 完美的「最新資料在最上方」倒序邏輯：
+                # 取最後 500 筆資料，然後將順序反轉 (iloc[::-1])，且完美保留 DataFrame 的 Header
+                df_latest_500 = df_history.tail(500).iloc[::-1]
+
+                st.dataframe(
+                    df_latest_500, use_container_width=True, hide_index=True
+                )
             else:
                 st.info("目前歷史紀錄無資料")
         except Exception as e:
