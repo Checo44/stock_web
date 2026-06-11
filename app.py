@@ -1,30 +1,24 @@
 import gspread
 import pandas as pd
 import streamlit as st
-from google.oauth2.service_account import Credentials  # 如果您是用這個方式認證
 
-# ==================== 1. 初始化 gspread (加入這段) ====================
+# ==================== 1. 初始化 gspread (免實體 JSON 檔案版) ====================
 try:
-    # 請將 '您的憑證路徑.json' 替換為您真正的 Google Cloud 金鑰 JSON 檔案路徑
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_file(
-        "您的憑證路徑.json", scopes=scope
-    )
-    gc = gspread.authorize(creds)
+    # 直接從 st.secrets 中讀取名為 "gcp_service_account" 的設定項目
+    # 這免去了管理本機 'xxx.json' 檔案路徑的困擾，且利於雲端部署
+    gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
 
-    # 或者是您原本如果使用 st.secrets 的話：
-    # gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-
-    # 將 '您的試算表名稱' 替換為雲端硬碟上那份 Excel/試算表的完整名稱
-    sh = gc.open("您的試算表名稱")  # <--- 就是這裡定義了 sh！
+    # 【注意】請將下方改為你雲端硬碟上那份試算表的「確切名稱」
+    sh = gc.open("您的試算表名稱")
 
 except Exception as e:
-    st.error(f"❌ Google Sheets 認證或打開檔案失敗: {e}")
-    st.stop()  # 認證失敗就停止往下執行，避免後面報錯
-# =====================================================================
+    st.error(
+        f"❌ Google Sheets 認證或打開檔案失敗。\n"
+        f"請檢查 .streamlit/secrets.toml 設定或試算表名稱是否正確。\n"
+        f"錯誤訊息: {e}"
+    )
+    st.stop()
+# ==============================================================================
 
 
 # 輔助函式：將 Google Sheets 的 get_all_values() 轉為乾淨的 DataFrame
@@ -42,7 +36,6 @@ tab1, tab2 = st.tabs(["ETF 異動矩陣", "其他數據"])
 with tab1:
     st.subheader("每日各 ETF 增減倉純淨異動矩陣")
     try:
-        # 現在這裡就能正常抓到 sh 了
         matrix_rows = sh.worksheet("ETF異動矩陣_純淨版").get_all_values()
         df_matrix = sheets_to_df(matrix_rows)
 
