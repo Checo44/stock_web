@@ -83,8 +83,8 @@ else:
 
             st.sidebar.success(f"成功開啟 {etf_input} 工作表")
             st.markdown(f"### 📈 {etf_input} 完整持股明細")
-            # 修正：寬度設定為 stretch 自適應容器
-            st.dataframe(df_etf, width="stretch", hide_index=True)
+            # 修正：Streamlit 1.x+ 滿寬度請改用 use_container_width=True，避免使用不支援的 "stretch"
+            st.dataframe(df_etf, use_container_width=True, hide_index=True)
         except gspread.exceptions.WorksheetNotFound:
             st.sidebar.error(f"❌ 找不到工作表: '{etf_input}'")
         except Exception as e:
@@ -107,30 +107,42 @@ else:
             df_matrix = sheets_to_df(matrix_rows)
 
             if not df_matrix.empty:
-                for col in df_matrix.columns[1:]:  # 假設第一欄是個股名稱/代號
-                    df_matrix[col] = pd.to_numeric(
-                        df_matrix[col], errors="ignore"
-                    )
+                # 修正與優化：走訪所有欄位，嘗試將能轉成數字的欄位進行轉換
+                for col in df_matrix.columns:
+                    # 使用 pd.to_numeric 並設定 errors='coerce'（無法轉換則留空）或 'ignore'
+                    # 這裡用 to_numeric 轉換後，如果整欄能轉成數字，Style 渐变色才能正確呈現
+                    converted = pd.to_numeric(df_matrix[col], errors="coerce")
+                    if not converted.isna().all():  # 如果這欄包含數字，則更新該欄位
+                        df_matrix[col] = converted.fillna(df_matrix[col])
 
-                # 修正：表格樣式漸層與寬度調整
+                # 修正：寬度設定改用 use_container_width=True
+                # 加上防呆：如果遇到非數值資料，Style 漸層可能會報錯，透過指定數值型欄位或 subset 來確保安全
+                numeric_cols = df_matrix.select_dtypes(
+                    include=["number"]
+                ).columns.tolist()
+                if numeric_cols:
+                    styled_df = df_matrix.style.background_gradient(
+                        cmap="RdYlGn", axis=0, subset=numeric_cols
+                    )
+                else:
+                    styled_df = df_matrix
+
                 st.dataframe(
-                    df_matrix.style.background_gradient(
-                        cmap="RdYlGn", axis=None
-                    ),
-                    width="stretch",
+                    styled_df,
+                    use_container_width=True,
                     hide_index=True,
                 )
             else:
                 st.info("工作表目前無資料")
         except Exception as e:
-            st.info("暫時無法讀取『ETF異動矩陣_純淨版』工作表")
+            st.info(f"暫時無法讀取『ETF異動矩陣_純淨版』工作表。錯誤: {e}")
 
     with tab2:
         st.subheader("今日異動英雄榜 (Hero_List)")
         try:
             hero_rows = sh.worksheet("Hero_List_美化版").get_all_values()
             df_hero = sheets_to_df(hero_rows)
-            st.dataframe(df_hero, width="stretch", hide_index=True)
+            st.dataframe(df_hero, use_container_width=True, hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『Hero_List_美化版』工作表")
 
@@ -139,7 +151,7 @@ else:
         try:
             chip_rows = sh.worksheet("標的籌碼分佈_美化版").get_all_values()
             df_chip = sheets_to_df(chip_rows)
-            st.dataframe(df_chip, width="stretch", hide_index=True)
+            st.dataframe(df_chip, use_container_width=True, hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『標的籌碼分佈_美化版』工作表")
 
@@ -149,9 +161,14 @@ else:
             history_rows = sh.worksheet("ETF History").get_all_values()
             if len(history_rows) > 1:
                 df_history = sheets_to_df(history_rows)
-                df_latest_500 = df_history.tail(500).iloc[::-1]
+                # 優化：取出最後 500 筆並倒序，建議加上 reset_index(drop=True) 確保索引純淨
+                df_latest_500 = (
+                    df_history.tail(500).iloc[::-1].reset_index(drop=True)
+                )
 
-                st.dataframe(df_latest_500, width="stretch", hide_index=True)
+                st.dataframe(
+                    df_latest_500, use_container_width=True, hide_index=True
+                )
             else:
                 st.info("目前歷史紀錄無資料")
         except Exception as e:
