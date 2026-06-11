@@ -1,7 +1,7 @@
 import json
 import os
-import pandas as pd
 import gspread
+import pandas as pd
 import streamlit as st
 
 # 1. 網頁基本設定 (全寬佈局、暗色科技風)
@@ -26,9 +26,9 @@ def get_sheets_client():
             st.error(f"❌ Secrets 中的 GOOGLE_CREDENTIALS JSON 解析失敗: {e}")
 
     # 本地開發備用
-    json_path = os.path.join(os.getcwd(), 'credentials.json')
+    json_path = os.path.join(os.getcwd(), "credentials.json")
     if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             return gspread.service_account_from_dict(json.load(f))
     return None
 
@@ -83,7 +83,7 @@ else:
 
             st.sidebar.success(f"成功開啟 {etf_input} 工作表")
             st.markdown(f"### 📈 {etf_input} 完整持股明細")
-            # 修正：use_container_width=True -> width='stretch'
+            # 修正：寬度設定為 stretch 自適應容器
             st.dataframe(df_etf, width="stretch", hide_index=True)
         except gspread.exceptions.WorksheetNotFound:
             st.sidebar.error(f"❌ 找不到工作表: '{etf_input}'")
@@ -112,7 +112,7 @@ else:
                         df_matrix[col], errors="ignore"
                     )
 
-                # 修正：use_container_width=True -> width='stretch'
+                # 修正：表格樣式漸層與寬度調整
                 st.dataframe(
                     df_matrix.style.background_gradient(
                         cmap="RdYlGn", axis=None
@@ -130,7 +130,6 @@ else:
         try:
             hero_rows = sh.worksheet("Hero_List_美化版").get_all_values()
             df_hero = sheets_to_df(hero_rows)
-            # 修正：use_container_width=True -> width='stretch'
             st.dataframe(df_hero, width="stretch", hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『Hero_List_美化版』工作表")
@@ -140,7 +139,6 @@ else:
         try:
             chip_rows = sh.worksheet("標的籌碼分佈_美化版").get_all_values()
             df_chip = sheets_to_df(chip_rows)
-            # 修正：use_container_width=True -> width='stretch'
             st.dataframe(df_chip, width="stretch", hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『標的籌碼分佈_美化版』工作表")
@@ -153,7 +151,6 @@ else:
                 df_history = sheets_to_df(history_rows)
                 df_latest_500 = df_history.tail(500).iloc[::-1]
 
-                # 修正：use_container_width=True -> width='stretch'
                 st.dataframe(df_latest_500, width="stretch", hide_index=True)
             else:
                 st.info("目前歷史紀錄無資料")
