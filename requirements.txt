@@ -1,4 +1,1 @@
-fastapi
-uvicorn
 gspread
-jinja2
