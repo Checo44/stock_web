@@ -26,9 +26,9 @@ def get_sheets_client():
             st.error(f"❌ Secrets 中的 GOOGLE_CREDENTIALS JSON 解析失敗: {e}")
 
     # 本地開發備用
-    json_path = os.path.join(os.getcwd(), "credentials.json")
+    json_path = os.path.join(os.getcwd(), 'credentials.json')
     if os.path.exists(json_path):
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, 'r', encoding='utf-8') as f:
             return gspread.service_account_from_dict(json.load(f))
     return None
 
@@ -83,7 +83,8 @@ else:
 
             st.sidebar.success(f"成功開啟 {etf_input} 工作表")
             st.markdown(f"### 📈 {etf_input} 完整持股明細")
-            st.dataframe(df_etf, use_container_width=True, hide_index=True)
+            # 修正：use_container_width=True -> width='stretch'
+            st.dataframe(df_etf, width="stretch", hide_index=True)
         except gspread.exceptions.WorksheetNotFound:
             st.sidebar.error(f"❌ 找不到工作表: '{etf_input}'")
         except Exception as e:
@@ -106,18 +107,17 @@ else:
             df_matrix = sheets_to_df(matrix_rows)
 
             if not df_matrix.empty:
-                # 嘗試將數值欄位轉為數字，方便 Streamlit 進行顏色塗裝 (Styler)
                 for col in df_matrix.columns[1:]:  # 假設第一欄是個股名稱/代號
                     df_matrix[col] = pd.to_numeric(
                         df_matrix[col], errors="ignore"
                     )
 
-                # 使用 Styler 為矩陣加上背景漸層（類似熱圖效果），讓增減倉視覺化
+                # 修正：use_container_width=True -> width='stretch'
                 st.dataframe(
                     df_matrix.style.background_gradient(
                         cmap="RdYlGn", axis=None
                     ),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -130,7 +130,8 @@ else:
         try:
             hero_rows = sh.worksheet("Hero_List_美化版").get_all_values()
             df_hero = sheets_to_df(hero_rows)
-            st.dataframe(df_hero, use_container_width=True, hide_index=True)
+            # 修正：use_container_width=True -> width='stretch'
+            st.dataframe(df_hero, width="stretch", hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『Hero_List_美化版』工作表")
 
@@ -139,10 +140,8 @@ else:
         try:
             chip_rows = sh.worksheet("標的籌碼分佈_美化版").get_all_values()
             df_chip = sheets_to_df(chip_rows)
-
-            # 範例美化：若表格中有「權重」或「籌碼比例」等欄位，可在此處設定進度條顯示
-            # 這裡直接輸出正確 Header 的 DataFrame
-            st.dataframe(df_chip, use_container_width=True, hide_index=True)
+            # 修正：use_container_width=True -> width='stretch'
+            st.dataframe(df_chip, width="stretch", hide_index=True)
         except Exception as e:
             st.info("暫時無法讀取『標的籌碼分佈_美化版』工作表")
 
@@ -151,16 +150,11 @@ else:
         try:
             history_rows = sh.worksheet("ETF History").get_all_values()
             if len(history_rows) > 1:
-                # 轉成 DataFrame
                 df_history = sheets_to_df(history_rows)
-
-                # 完美的「最新資料在最上方」倒序邏輯：
-                # 取最後 500 筆資料，然後將順序反轉 (iloc[::-1])，且完美保留 DataFrame 的 Header
                 df_latest_500 = df_history.tail(500).iloc[::-1]
 
-                st.dataframe(
-                    df_latest_500, use_container_width=True, hide_index=True
-                )
+                # 修正：use_container_width=True -> width='stretch'
+                st.dataframe(df_latest_500, width="stretch", hide_index=True)
             else:
                 st.info("目前歷史紀錄無資料")
         except Exception as e:
