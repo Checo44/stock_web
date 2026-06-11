@@ -112,4 +112,4 @@ else:
             else:
                 st.info("目前歷史紀錄無資料")
         except Exception as e:
-            st.info("暫時無法讀取『ETF History』工作表")s
+            st.info("暫時無法讀取『ETF History』工作表")
