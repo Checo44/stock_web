@@ -5,6 +5,7 @@ import numpy as np
 import gspread
 import json
 import os
+import requests
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -111,6 +112,35 @@ def fetch_ticker_mapping():
     except Exception as e:
         return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
 
+# ==========================================
+# 🆕 玩股網即時大表爬蟲整合模組
+# ==========================================
+def fetch_wantgoo_etf_data():
+    """向玩股網發送請求，獲取全市場 ETF 的最新即時行情數據"""
+    api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.wantgoo.com/stock/etf/net-value"
+    }
+    try:
+        res = requests.get(api_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            # 傳回對照字典： { "0050": { "price": 107.3, "change": 1.3, "premium": -0.05, "volume": 220774 } }
+            market_data = {}
+            for item in res.json():
+                stock_no = str(item.get("stockNo", "")).strip()
+                if stock_no:
+                    market_data[stock_no] = {
+                        "price": item.get("price", "-"),
+                        "change": item.get("changeValue", "-"), # 漲跌絕對值
+                        "premium": item.get("discountPremiumRate", "-"), # 折溢價%
+                        "volume": item.get("volume", "-") # 成交量
+                    }
+            return market_data
+    except Exception as e:
+        print(f"玩股網爬蟲異常: {e}")
+    return {}
+
 def process_and_standardize(raw_data, ticker_map=None):
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
     df.columns = [str(c).strip() for c in df.columns]
@@ -160,22 +190,26 @@ def process_and_standardize(raw_data, ticker_map=None):
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
-        return "[]"
+        return "[]", {}
         
     ticker_map, _ = fetch_ticker_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty:
-        return "[]"
+        return "[]", {}
+    
+    # 在此抓取玩股網即時爬蟲數據，一同傳遞給前端
+    wantgoo_data = fetch_wantgoo_etf_data()
     
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False)
+    return json.dumps(records, ensure_ascii=False), wantgoo_data
 
 # ==========================================
 # 4. 主渲染邏輯
 # ==========================================
 def main():
-    json_data = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data = fetch_backend_data_to_json()
+    wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -348,29 +382,35 @@ def main():
 
               <div class="col-lg-9">
                 
-                <div id="metaContainer" class="row g-3 mb-4" style="display: none;">
-                  <div class="col-6 col-md-3">
+                <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
+                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #3182ce;">
                       <div class="meta-label">市價</div>
                       <div class="meta-value" id="metaMarketPrice">-</div>
                     </div>
                   </div>
-                  <div class="col-6 col-md-3">
+                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #e53e3e;">
                       <div class="meta-label">漲跌</div>
                       <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
-                  <div class="col-6 col-md-3">
+                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #319795;">
                       <div class="meta-label">折溢價</div>
                       <div class="meta-value" id="metaPremium">-</div>
                     </div>
                   </div>
-                  <div class="col-6 col-md-3">
+                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #805ad5;">
                       <div class="meta-label">規模</div>
                       <div class="meta-value" id="metaSize">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #dd6b20;">
+                      <div class="meta-label">成交量</div>
+                      <div class="meta-value" id="metaVolume">-</div>
                     </div>
                   </div>
                 </div>
@@ -623,6 +663,7 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
+        let wantgooMarketData = __WANTGOO_PLACEHOLDER__; // 載入玩股網對照表
         let activeEtf = "";
 
         document.addEventListener("DOMContentLoaded", function() {
@@ -688,19 +729,32 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            let getMeta = (key) => {
-                let found = latestRows.find(r => r.stock === key);
-                if(!found) return "-";
-                return typeof found.volume === 'number' ? found.volume.toLocaleString() : found.volume;
-            };
+            // 🛠️ 優先比對並抓取玩股網即時大表爬下來的數據
+            let liveData = wantgooMarketData[etfName] || null;
 
-            document.getElementById('metaContainer').style.display = 'flex';
-            document.getElementById('metaChange').innerText = getMeta("漲跌");
-            document.getElementById('metaMarketPrice').innerText = getMeta("市價");
-            document.getElementById('metaPremium').innerText = getMeta("折溢價") + "%";
-            
+            if (liveData) {
+                document.getElementById('metaMarketPrice').innerText = liveData.price !== null ? liveData.price : "-";
+                document.getElementById('metaChange').innerText = liveData.change !== null ? liveData.change : "-";
+                document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
+                document.getElementById('metaVolume').innerText = liveData.volume !== null ? Number(liveData.volume).toLocaleString() + " 股" : "-";
+            } else {
+                // 若玩股網無該代號，退回讀取原試算表中的 meta 備份欄位
+                let getMeta = (key) => {
+                    let found = latestRows.find(r => r.stock === key);
+                    if(!found) return "-";
+                    return typeof found.volume === 'number' ? found.volume.toLocaleString() : found.volume;
+                };
+                document.getElementById('metaMarketPrice').innerText = getMeta("市價");
+                document.getElementById('metaChange').innerText = getMeta("漲跌");
+                document.getElementById('metaPremium').innerText = getMeta("折溢價") + "%";
+                document.getElementById('metaVolume').innerText = "-";
+            }
+
+            // 規模維持讀取歷史試算表記錄
             let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
             document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
+
+            document.getElementById('metaContainer').style.display = 'flex';
 
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
@@ -999,7 +1053,7 @@ def main():
     </html>
     """
 
-    final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data)
+    final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data).replace("__WANTGOO_PLACEHOLDER__", wantgoo_json)
     components.html(final_html, height=1600, scrolling=True)
 
 if __name__ == "__main__":
