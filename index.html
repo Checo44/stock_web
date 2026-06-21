@@ -1,177 +1,112 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ETF 籌碼大數據監控面板</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
   
   <style>
-    /* ==========================================
-       🎨 全真還原：高質感金融特調視覺 CSS
-       ========================================== */
     body {
-      background-color: #f3f4f6 !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif;
-      color: #1e293b;
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f4f6f9;
+      color: #333;
     }
-    
-    /* 導覽列 */
     .navbar {
-      background-color: #0f172a !important;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
-    
-    /* 頁籤美化 */
-    .nav-tabs .nav-link {
-      color: #475569;
-      font-weight: 500;
+    .card {
       border: none;
-      padding: 12px 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+      margin-bottom: 1.5rem;
+      background-color: #fff;
+    }
+    .card-header {
+      background-color: #fff;
+      border-bottom: 1px solid #edf2f9;
+      font-weight: 700;
+      font-size: 1.1rem;
+      padding: 1rem 1.25rem;
+      border-top-left-radius: 12px !important;
+      border-top-right-radius: 12px !important;
+    }
+    .table {
+      margin-bottom: 0;
+    }
+    .table th {
+      background-color: #f8fafd;
+      color: #4a5568;
+      font-weight: 600;
+    }
+    .meta-card {
+      background: #ffffff;
+      border-left: 4px solid #2a5298;
+      padding: 12px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+      text-align: center;
+    }
+    .meta-label {
+      font-size: 0.85rem;
+      color: #718096;
+      margin-bottom: 4px;
+    }
+    .meta-value {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #1a202c;
+    }
+    .nav-tabs .nav-link {
+      border: none;
+      color: #4a5568;
+      font-weight: 500;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
     }
     .nav-tabs .nav-link.active {
-      color: #1e40af !important;
+      background-color: #e2e8f0;
+      color: #1e3c72;
       font-weight: 700;
-      background-color: transparent;
-      border-bottom: 3px solid #1e40af;
     }
-
-    /* 載入遮罩 */
     .loading-overlay {
       position: fixed;
       top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(255, 255, 255, 0.85);
-      z-index: 9999;
-      display: flex;
+      background: rgba(255,255,255,0.7);
+      display: flex; justify-content: center; align-items: center;
+      z-index: 9999; display: none;
+    }
+    .etf-list-group {
+      max-height: 700px;
+      overflow-y: auto;
+    }
+    .etf-item-btn {
+      text-align: left;
+      border-radius: 8px !important;
+      margin-bottom: 4px;
+      border: 1px solid #e2e8f0;
+      transition: all 0.2s;
+    }
+    .etf-item-btn:hover {
+      background-color: #f1f5f9;
+    }
+    .etf-item-btn.active {
+      background-color: #1e3c72 !important;
+      border-color: #1e3c72 !important;
+      color: #fff !important;
+      font-weight: bold;
+    }
+    .rank-badge {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-    }
-
-    /* 通用獨立白底卡片外殼 */
-    .card {
-      background: #ffffff !important;
-      border: 1px solid #e5e7eb !important;
-      border-radius: 8px !important;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.02) !important;
-      margin-bottom: 1.5rem;
-      overflow: hidden;
-    }
-    .card-header {
-      background-color: #ffffff !important;
-      border-bottom: 1px solid #f1f5f9 !important;
-      font-weight: 700;
-      font-size: 0.95rem;
-      padding: 14px 18px;
-    }
-
-    /* 頂部 6 聯排獨立彩色指標頂條卡片 */
-    .meta-card {
-      background: #ffffff;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-      padding: 12px 8px;
-      text-align: center;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.01);
-    }
-    .meta-label {
-      font-size: 0.8rem;
-      color: #64748b;
-      margin-bottom: 4px;
-      font-weight: 500;
-    }
-    .meta-value {
-      font-size: 1.25rem;
-      font-weight: 700;
-      color: #0f172a;
-    }
-
-    /* 還原圖二：左側單選清單卡片化美化 */
-    .etf-list-group {
-      max-height: 500px;
-      overflow-y: auto;
-      gap: 6px;
-    }
-    .etf-list-group .list-group-item-action {
-      background-color: #ffffff !important;
-      border: 1px solid #e2e8f0 !important;
-      border-radius: 6px !important;
-      padding: 11px 14px !important;
-      color: #334155 !important;
-      font-weight: 500;
-      transition: all 0.15s ease;
-    }
-    .etf-list-group .list-group-item-action:hover {
-      background-color: #f8fafc !important;
-      border-color: #cbd5e1 !important;
-    }
-    .etf-list-group .list-group-item-action.active {
-      background-color: #1e3a8a !important; /* 滿版深藍高質感 */
-      border-color: #1e3a8a !important;
-      color: #ffffff !important;
-      font-weight: 700;
-    }
-
-    /* 還原圖一：表格內嵌精緻獨立白色小藥丸（Pill Badge） */
-    .badge-stock-code {
-      border: 1px solid #cbd5e1;
-      background-color: #ffffff;
-      border-radius: 4px;
-      padding: 2px 7px;
-      font-family: monospace;
-      font-size: 0.82rem;
-      color: #475569;
-      font-weight: 500;
-      display: inline-block;
-    }
-
-    /* 還原圖三：動態籌碼異動性質標籤 */
-    .badge-nature-up {
-      background-color: #dc2626; /* 增加/新增：高質感艷紅 */
-      color: white;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 0.78rem;
-      font-weight: 600;
-    }
-    .badge-nature-down {
-      background-color: #0f766e; /* 減少：圖三深綠/藍綠色 */
-      color: white;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 0.78rem;
-      font-weight: 600;
-    }
-
-    /* 還原圖三：歷史連續買賣狀態淡黃色高質感標籤 */
-    .badge-trend-sell {
-      background-color: #fef3c7;
-      color: #92400e;
-      padding: 4px 12px;
-      border-radius: 4px;
-      font-weight: 600;
-      font-size: 0.82rem;
-      border: 1px solid #fde68a;
-    }
-    .badge-trend-buy {
-      background-color: #dcfce7;
-      color: #166534;
-      padding: 4px 12px;
-      border-radius: 4px;
-      font-weight: 600;
-      font-size: 0.82rem;
-      border: 1px solid #bbf7d0;
-    }
-
-    /* 日期區間分析專用 Badge */
-    .date-badge {
-      background-color: #f1f5f9;
-      color: #334155;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-weight: 600;
-      border: 1px solid #cbd5e1;
-      font-size: 0.82rem;
+      border-radius: 50%;
+      font-weight: bold;
+      font-size: 0.85rem;
     }
   </style>
 </head>
@@ -226,55 +161,53 @@
 
           <div class="col-lg-9">
             
-            <div id="metaContainer" class="row g-3 mb-4" style="display: flex;">
+            <div id="metaContainer" class="row g-3 mb-4" style="display: none;">
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #4a5568;">
+                <div class="meta-card" style="border-left-color: #4a5568;">
                   <div class="meta-label">昨收價</div>
                   <div class="meta-value" id="metaLastClose">-</div>
                 </div>
               </div>
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #e53e3e;">
+                <div class="meta-card" style="border-left-color: #e53e3e;">
                   <div class="meta-label">漲跌</div>
                   <div class="meta-value" id="metaChange">-</div>
                 </div>
               </div>
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #3182ce;">
+                <div class="meta-card" style="border-left-color: #3182ce;">
                   <div class="meta-label">市價</div>
                   <div class="meta-value" id="metaMarketPrice">-</div>
                 </div>
               </div>
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #dd6b20;">
+                <div class="meta-card" style="border-left-color: #dd6b20;">
                   <div class="meta-label">股數</div>
                   <div class="meta-value" id="metaAmount">-</div>
                 </div>
               </div>
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #805ad5;">
+                <div class="meta-card" style="border-left-color: #805ad5;">
                   <div class="meta-label">規模</div>
                   <div class="meta-value" id="metaSize">-</div>
                 </div>
               </div>
               <div class="col-6 col-md-2">
-                <div class="meta-card" style="border-top: 3px solid #319795;">
+                <div class="meta-card" style="border-left-color: #319795;">
                   <div class="meta-label">折溢價</div>
                   <div class="meta-value" id="metaPremium">-</div>
                 </div>
               </div>
             </div>
 
-            <div class="row g-3 mb-4">
+            <div class="row">
               <div class="col-lg-7">
-                <div class="card h-100 m-0">
-                  <div class="card-header text-primary fw-bold"><i class="bi bi-list-stars me-2"></i>最新成分股持股明細</div>
-                  <div class="table-responsive" style="max-height: 350px;">
-                    <table class="table table-hover align-middle mb-0" style="font-size:0.88rem;">
+                <div class="card">
+                  <div class="card-header text-primary"><i class="bi bi-list-stars me-2"></i>最新成分股持股明細</div>
+                  <div class="table-responsive" style="max-height: 450px;">
+                    <table class="table table-hover align-middle">
                       <thead>
-                        <tr class="table-light text-secondary sticky-top top-0">
-                          <th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th class="text-end">最新持股(股)</th>
-                        </tr>
+                        <tr><th>股票代號</th><th>股票名稱</th><th>持股權重</th><th>最新持股(股)</th></tr>
                       </thead>
                       <tbody id="stockTableBody"></tbody>
                     </table>
@@ -283,14 +216,12 @@
               </div>
               
               <div class="col-lg-5">
-                <div class="card h-100 m-0">
-                  <div class="card-header text-secondary fw-bold"><i class="bi bi-cash-coin me-2"></i>非股票資產項目</div>
-                  <div class="table-responsive" style="max-height: 350px;">
-                    <table class="table table-hover align-middle mb-0" style="font-size:0.88rem;">
+                <div class="card">
+                  <div class="card-header text-secondary"><i class="bi bi-cash-coin me-2"></i>非股票資產項目</div>
+                  <div class="table-responsive" style="max-height: 450px;">
+                    <table class="table table-hover align-middle">
                       <thead>
-                        <tr class="table-light text-secondary sticky-top top-0">
-                          <th>資產代號</th><th>資產項目</th><th class="text-end">權重</th><th class="text-end">資產價值(股)</th>
-                        </tr>
+                        <tr><th>資產代號</th><th>資產項目</th><th>權重</th><th>資產價值(股)</th></tr>
                       </thead>
                       <tbody id="assetTableBody"></tbody>
                     </table>
@@ -301,7 +232,7 @@
 
             <div class="card p-3 mb-4 bg-light border">
               <div class="row align-items-center g-3">
-                <div class="col-md-5">
+                <div class="col-md-4">
                   <label class="form-label fw-bold text-dark"><i class="bi bi-calendar-range me-1"></i>籌碼比較天數 / 範圍</label>
                   <select id="rangeType" class="form-select" onchange="toggleCustomDates()">
                     <option value="1">與前 1 筆紀錄比較 (日變動)</option>
@@ -310,38 +241,38 @@
                     <option value="custom">自訂特定兩日期區間</option>
                   </select>
                 </div>
-                <div class="col-md-4" id="customDateGroup" style="display: none;">
-                  <div class="row g-2">
+                <div class="col-md-5" id="customDateGroup" style="display: none;">
+                  <div class="row">
                     <div class="col-6">
-                      <label class="form-label small fw-bold text-secondary mb-1">舊日期</label>
-                      <input type="text" id="startDate" class="form-control form-control-sm" placeholder="YYYY-MM-DD">
+                      <label class="form-label fw-bold text-secondary">舊日期 (YYYY-MM-DD)</label>
+                      <input type="text" id="startDate" class="form-control" placeholder="YYYY-MM-DD">
                     </div>
                     <div class="col-6">
-                      <label class="form-label small fw-bold text-secondary mb-1">新日期</label>
-                      <input type="text" id="endDate" class="form-control form-control-sm" placeholder="YYYY-MM-DD">
+                      <label class="form-label fw-bold text-secondary">新日期 (YYYY-MM-DD)</label>
+                      <input type="text" id="endDate" class="form-control" placeholder="YYYY-MM-DD">
                     </div>
                   </div>
                 </div>
-                <div class="col-md-3 pt-3">
+                <div class="col-md-3 pt-4">
                   <button class="btn btn-outline-dark w-100" onclick="refreshCurrentEtf()"><i class="bi bi-calculator me-1"></i>重新計算籌碼</button>
                 </div>
               </div>
               <div class="mt-2 text-muted small px-1" id="dateDisplayInfo"></div>
             </div>
 
-            <div class="card m-0">
+            <div class="card">
               <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                <span class="fw-bold"><i class="bi bi-lightning-charge-fill me-2 text-warning"></i>動態籌碼異動計算與連續狀態追蹤</span>
+                <span><i class="bi bi-lightning-charge-fill me-2 text-warning"></i>動態籌碼異動計算與連續狀態追蹤</span>
                 <span class="badge bg-secondary" id="compareDateBadge"></span>
               </div>
               <div class="table-responsive">
-                <table class="table table-striped table-hover align-middle mb-0" style="font-size:0.88rem;">
+                <table class="table table-striped table-hover align-middle">
                   <thead>
-                    <tr class="table-light">
+                    <tr>
                       <th>成分股</th>
                       <th>異動性質</th>
-                      <th class="text-end">區間增減股數</th>
-                      <th class="table-warning text-dark fw-bold px-4">核心歷史連續買賣狀態</th>
+                      <th>區間增減股數</th>
+                      <th class="table-warning text-dark fw-bold">核心歷史連續買賣狀態</th>
                     </tr>
                   </thead>
                   <tbody id="changeTableBody"></tbody>
@@ -354,10 +285,10 @@
       </div>
 
       <div class="tab-pane fade" id="content-b" role="tabpanel">
-        <div class="card p-4">
+        <div class="card p-3">
           <div class="row align-items-center g-3">
             <div class="col-md-6">
-              <label class="form-label fw-bold text-secondary"><i class="bi bi-search me-1"></i>請輸入個股代號 (如: 2330)</label>
+              <label class="form-label fw-bold text-secondary">請輸入個股代號 (如: 2330)</label>
               <input type="text" id="stockInput" class="form-control form-control-lg" placeholder="例如: 2330">
             </div>
             <div class="col-md-3 pt-4">
@@ -366,12 +297,10 @@
           </div>
         </div>
         <div id="stockResultCard" class="card" style="display: none;">
-          <div class="card-header bg-success text-white fw-bold" id="stockResultTitle"></div>
+          <div class="card-header bg-success text-white" id="stockResultTitle"></div>
           <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-              <thead class="table-light">
-                <tr><th>持有該股之 ETF 代號</th><th class="text-end">持股權重占比</th><th class="text-end">持有股數</th></tr>
-              </thead>
+            <table class="table table-hover align-middle">
+              <thead><tr><th>持有該股之 ETF 代號</th><th>持股權重占比</th><th>持有股數</th></tr></thead>
               <tbody id="stockDistBody"></tbody>
             </table>
           </div>
@@ -379,7 +308,7 @@
       </div>
 
       <div class="tab-pane fade" id="content-c" role="tabpanel">
-        <div class="card p-3 bg-light">
+        <div class="card p-3 mb-4 bg-light">
           <div class="row align-items-center g-3">
             <div class="col-md-4">
               <label class="form-label fw-bold text-secondary">全市場異動比較範圍</label>
@@ -391,7 +320,7 @@
               </select>
             </div>
             <div class="col-md-5" id="globalCustomDateGroup" style="display: none;">
-              <div class="row g-2">
+              <div class="row">
                 <div class="col-6">
                   <input type="text" id="globalStartDate" class="form-control" placeholder="舊日期 YYYY-MM-DD">
                 </div>
@@ -400,17 +329,17 @@
                 </div>
               </div>
             </div>
-            <div class="col-md-3 pt-3">
+            <div class="col-md-3">
               <button class="btn btn-dark w-100 btn-lg" onclick="loadGlobalChanges()"><i class="bi bi-globe2 me-1"></i>生成異動總覽</button>
             </div>
           </div>
         </div>
         <div class="card">
-          <div class="card-header bg-danger text-white fw-bold" id="globalTitle">全市場 ETF 成分股異動排行追蹤</div>
+          <div class="card-header bg-danger text-white" id="globalTitle">全市場 ETF 成分股異動排行追蹤</div>
           <div class="table-responsive">
-            <table class="table table-hover table-striped align-middle mb-0">
-              <thead class="table-light">
-                <tr><th>ETF</th><th>成分股</th><th>異動性質</th><th class="text-end">增減股數</th><th>連續買賣狀態</th></tr>
+            <table class="table table-hover table-striped align-middle">
+              <thead>
+                <tr><th>ETF</th><th>成分股</th><th>異動性質</th><th>增減股數</th><th>連續買賣狀態</th></tr>
               </thead>
               <tbody id="globalTableBody"></tbody>
             </table>
@@ -419,7 +348,7 @@
       </div>
 
       <div class="tab-pane fade" id="content-d" role="tabpanel">
-        <div class="card p-3 bg-light">
+        <div class="card p-3 mb-4 bg-light">
           <div class="row align-items-center g-3">
             <div class="col-md-4">
               <label class="form-label fw-bold text-secondary">熱度統計比較範圍</label>
@@ -431,7 +360,7 @@
               </select>
             </div>
             <div class="col-md-5" id="heatCustomDateGroup" style="display: none;">
-              <div class="row g-2">
+              <div class="row">
                 <div class="col-6">
                   <input type="text" id="heatStartDate" class="form-control" placeholder="舊日期 YYYY-MM-DD">
                 </div>
@@ -440,539 +369,5 @@
                 </div>
               </div>
             </div>
-            <div class="col-md-3 pt-3">
-              <button class="btn btn-danger w-100 btn-lg" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="row g-4">
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header bg-danger text-white fw-bold" id="heatBuyTitle"><i class="bi bi-graph-up me-2"></i>跨市場大加總：淨買超前 10 大個股</div>
-              <div class="table-responsive">
-                <table class="table table-hover table-striped align-middle mb-0">
-                  <thead class="table-light">
-                    <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨加碼(股)</th></tr>
-                  </thead>
-                  <tbody id="heatBuyTableBody">
-                    <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          <div class="col-lg-6">
-            <div class="card">
-              <div class="card-header bg-success text-white fw-bold" id="heatSellTitle"><i class="bi bi-graph-down me-2"></i>跨市場大加總：淨賣超前 10 大個股</div>
-              <div class="table-responsive">
-                <table class="table table-hover table-striped align-middle mb-0">
-                  <thead class="table-light">
-                    <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr>
-                  </thead>
-                  <tbody id="heatSellTableBody">
-                    <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="tab-pane fade" id="content-e" role="tabpanel">
-        <div class="card p-3 bg-light">
-          <div class="row align-items-center g-3">
-            <div class="col-12">
-              <label class="form-label fw-bold text-secondary mb-2"><i class="bi bi-check2-square me-1"></i>請選擇要比較的 ETF 代號（可多選）</label>
-              <div id="compareEtfCheckboxes" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded" style="max-height: 150px; overflow-y: auto;">
-                </div>
-            </div>
-            <div class="col-md-3 pt-2">
-              <button class="btn btn-primary w-100 btn-lg" onclick="generateComparison()"><i class="bi bi-layout-three-columns me-1"></i>開始交叉比較</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header bg-primary text-white fw-bold" id="compareTitle"><i class="bi bi-layout-three-columns me-2"></i>ETF 持股權重交叉比較矩陣</div>
-          <div class="table-responsive">
-            <table class="table table-hover table-striped align-middle mb-0" style="font-size:0.88rem;">
-              <thead class="table-light">
-                <tr id="compareTableHeader">
-                  <th>股票代號</th>
-                  <th>股票名稱</th>
-                </tr>
-              </thead>
-              <tbody id="compareTableBody">
-                <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」鈕</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
-  <script>
-    // 💡 串接提示：請替換成你的 Google Sheet API 或者是 Web App 網址
-    // 這裡我們模擬後端回傳的標準大型 JSON 結構資料
-    const MOCK_API_ENDPOINT = ""; 
-
-    let globalRawData = []; 
-    let activeEtf = "";
-
-    // 模擬全市場大型資料集 (用以展示強大前端運算力)
-    const mockEtfs = ["0050 元大台灣50", "0056 元大高股息", "00878 國泰永續高股息", "00919 群益台灣精選高息", "00929 復華台灣科技優息"];
-    const mockStocks = [
-      {code:"2330", name:"台積電"}, {code:"2317", name:"鴻海"}, {code:"2454", name:"聯發科"},
-      {code:"2308", name:"台達電"}, {code:"2382", name:"廣達"}, {code:"2303", name:"聯電"}
-    ];
-    const mockDates = ["2026-06-17", "2026-06-18", "2026-06-19", "2026-06-20", "2026-06-21"];
-
-    // 初始化模擬大數據
-    function generateMockDatabase() {
-      let data = [];
-      mockDates.forEach((date, dIdx) => {
-        mockEtfs.forEach(etf => {
-          // 放入 Meta 中介數據
-          data.push({date:date, etf:etf, stock:"昨收價", name:"昨收價", weight:0, volume: 100 + dIdx*2});
-          data.push({date:date, etf:etf, stock:"漲跌", name:"漲跌", weight:0, volume: 1.5 - dIdx*0.2});
-          data.push({date:date, etf:etf, stock:"市價", name:"市價", weight:0, volume: 101 + dIdx*2});
-          data.push({date:date, etf:etf, stock:"規模", name:"規模", weight:0, volume: 2500000000 + dIdx * 50000000});
-          data.push({date:date, etf:etf, stock:"折溢價", name:"折溢價", weight:0, volume: 0.12});
-
-          // 放入正常股票資產
-          mockStocks.forEach((stk, sIdx) => {
-            let baseVol = 50000000 + (sIdx * 10000000);
-            // 刻意製造有買有賣的連續趨勢
-            let volChange = (etf.includes("0050") && stk.code === "2330") 
-              ? dIdx * 500000   // 連買
-              : (stk.code === "2317") ? -dIdx * 300000 : (dIdx % 2 === 0 ? 150000 : -10000); // 隨機
-            
-            data.push({
-              date: date, etf: etf, stock: stk.code, name: stk.name,
-              weight: 25.5 - (sIdx * 3), volume: baseVol + volChange
-            });
-          });
-
-          // 放入非股票項目
-          data.push({date:date, etf:etf, stock:"💡 CASH", name:"轉申購保證金與現金總額", weight:1.2, volume: 120000000});
-        });
-      });
-      return data;
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-      // 載入資料
-      setTimeout(() => {
-        globalRawData = generateMockDatabase();
-        document.getElementById('loading').style.display = 'none';
-        
-        initEtfList();
-        initCompareCheckboxes();
-        if(mockEtfs.length > 0) {
-          selectEtf(mockEtfs[0]);
-        }
-      }, 800);
-    });
-
-    // 建立左側列表
-    function initEtfList() {
-      const container = document.getElementById('etfButtonList');
-      container.innerHTML = "";
-      mockEtfs.forEach(etf => {
-        const btn = document.createElement('button');
-        btn.className = "list-group-item list-group-item-action";
-        btn.type = "button";
-        btn.id = `etf-btn-${etf}`;
-        btn.innerHTML = `<i class="bi bi-file-earmark-text me-2"></i>${etf}`;
-        btn.onclick = () => selectEtf(etf);
-        container.appendChild(btn);
-      });
-    }
-
-    // 左側關鍵字即時過濾
-    function filterEtfList() {
-      const query = document.getElementById('etfSearchInput').value.toLowerCase();
-      mockEtfs.forEach(etf => {
-        const btn = document.getElementById(`etf-btn-${etf}`);
-        if(btn) {
-          btn.style.display = etf.toLowerCase().includes(query) ? "block" : "none";
-        }
-      });
-    }
-
-    // 選取特定 ETF
-    function selectEtf(etfName) {
-      activeEtf = etfName;
-      mockEtfs.forEach(e => {
-        const btn = document.getElementById(`etf-btn-${e}`);
-        if(btn) btn.classList.remove('active');
-      });
-      document.getElementById(`etf-btn-${etfName}`).classList.add('active');
-
-      // 更新預設日期資訊
-      const etfData = globalRawData.filter(d => d.etf === etfName);
-      const dates = [...new Set(etfData.map(d => d.date))].sort();
-      
-      if(dates.length > 0) {
-        document.getElementById('endDate').value = dates[dates.length - 1];
-        document.getElementById('startDate').value = dates[dates.length - 2] || dates[0];
-      }
-      
-      refreshCurrentEtf();
-    }
-
-    // 判斷是否為常規個股
-    function isNormalStock(stockCode, name) {
-      const meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價"];
-      const cashEx = ["CASH", "C_", "USD", "TWD", "現金", "保證金", "期貨", "應收", "應付"];
-      if (meta.includes(stockCode)) return false;
-      if (cashEx.some(k => stockCode.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
-      return true;
-    }
-
-    // 計算核心連續買賣日數
-    function computeContinuousStatus(etfRows, sortedDates, targetStock) {
-      if(sortedDates.length < 2) return "-";
-      let historyDiffs = [];
-      
-      for(let i = 1; i < sortedDates.length; i++) {
-        let prevDate = sortedDates[i-1];
-        let currDate = sortedDates[i];
-        
-        let pVol = etfRows.find(r => r.date === prevDate && r.stock === targetStock)?.volume || 0;
-        let cVol = etfRows.find(r => r.date === currDate && r.stock === targetStock)?.volume || 0;
-        historyDiffs.push(cVol - pVol);
-      }
-
-      // 由最新一日倒序推算
-      let revDiffs = [...historyDiffs].reverse();
-      if(revDiffs.length === 0 || revDiffs[0] === 0) return "-";
-      
-      let isBuy = revDiffs[0] > 0;
-      let count = 0;
-      for(let d of revDiffs) {
-        if(isBuy && d > 0) count++;
-        else if(!isBuy && d < 0) count++;
-        else break;
-      }
-      return `連${isBuy ? '買' : '賣'} ${count} 日`;
-    }
-
-    // 核心 A 頁籤重繪計算
-    function refreshCurrentEtf() {
-      if(!activeEtf) return;
-      const etfData = globalRawData.filter(d => d.etf === activeEtf);
-      const sortedDates = [...new Set(etfData.map(d => d.date))].sort();
-      const latestDate = sortedDates[sortedDates.length - 1];
-
-      const currentRows = etfData.filter(d => d.date === latestDate);
-
-      // 1. 填入頂部 6 聯排
-      const findMeta = (key) => currentRows.find(r => r.stock === key)?.volume || "-";
-      document.getElementById('metaLastClose').innerText = findMeta("昨收價");
-      document.getElementById('metaChange').innerText = findMeta("漲跌");
-      document.getElementById('metaMarketPrice').innerText = findMeta("市價");
-      document.getElementById('metaSize').innerText = typeof findMeta("規模") === 'number' ? (findMeta("規模")/100000000).toFixed(1) + " 億" : "-";
-      document.getElementById('metaPremium').innerText = findMeta("折溢價") + "%";
-
-      // 2. 篩選與渲染圖一雙表格
-      const stocks = currentRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b)=>b.weight - a.weight);
-      const assets = currentRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
-
-      // 總股數加總填入指標
-      let totalStockVol = stocks.reduce((sum, r) => sum + r.volume, 0);
-      document.getElementById('metaAmount').innerText = totalStockVol.toLocaleString() + " 股";
-
-      // 渲染成分股
-      const stockTable = document.getElementById('stockTableBody');
-      stockTable.innerHTML = "";
-      stocks.forEach(r => {
-        stockTable.innerHTML += `
-          <tr>
-            <td><span class="badge-stock-code">${r.stock}</span></td>
-            <td class="fw-bold">${r.name}</td>
-            <td class="text-end text-primary fw-bold">${r.weight.toFixed(2)}%</td>
-            <td class="text-end text-secondary">${Math.round(r.volume).toLocaleString()} 股</td>
-          </tr>
-        `;
-      });
-
-      // 渲染非股票
-      const assetTable = document.getElementById('assetTableBody');
-      assetTable.innerHTML = "";
-      assets.forEach(r => {
-        assetTable.innerHTML += `
-          <tr>
-            <td><span class="badge-stock-code">${r.stock}</span></td>
-            <td class="text-muted text-truncate" style="max-width:150px;">${r.name}</td>
-            <td class="text-end">${r.weight > 0 ? r.weight.toFixed(2)+'%' : '-'}</td>
-            <td class="text-end text-secondary">${r.volume > 0 ? Math.round(r.volume).toLocaleString() : '-'}</td>
-          </tr>
-        `;
-      });
-
-      // 3. 處理區間動態籌碼變化比較（對齊自訂或下拉範圍）
-      const rangeType = document.getElementById('rangeType').value;
-      let compareDate = "";
-      if(rangeType === "custom") {
-        compareDate = document.getElementById('startDate').value;
-      } else {
-        let offset = parseInt(rangeType);
-        let idx = Math.max(0, sortedDates.length - 1 - offset);
-        compareDate = sortedDates[idx];
-        document.getElementById('startDate').value = compareDate;
-      }
-
-      document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼分析區間：</b> 比較日 <span class="date-badge">${compareDate}</span> ➔ 基準日 <span class="date-badge">${latestDate}</span>`;
-      document.getElementById('compareDateBadge').innerText = `對比基準區間: ${compareDate} ~ ${latestDate}`;
-
-      // 4. 計算並生成底層表格 (圖三)
-      const compRows = etfData.filter(d => d.date === compareDate);
-      const changeTable = document.getElementById('changeTableBody');
-      changeTable.innerHTML = "";
-
-      stocks.forEach(r => {
-        let oldVol = compRows.find(c => c.stock === r.stock)?.volume || 0;
-        let diff = r.volume - oldVol;
-        
-        if(diff !== 0) {
-          let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
-          let natureBadge = nature === "減少" ? `<span class="badge-nature-down">${nature}</span>` : `<span class="badge-nature-up">${nature}</span>`;
-          let diffColor = nature === "減少" ? "color:#0f766e;" : "color:#dc2626;";
-          
-          let trendStr = computeContinuousStatus(etfData, sortedDates, r.stock);
-          let trendHtml = "-";
-          if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
-          if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
-
-          changeTable.innerHTML += `
-            <tr>
-              <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
-              <td>${natureBadge}</td>
-              <td class="text-end fw-bold" style="${diffColor}">${Math.round(diff).toLocaleString()} 股</td>
-              <td class="px-4">${trendHtml}</td>
-            </tr>
-          `;
-        }
-      });
-    }
-
-    function toggleCustomDates() {
-      const type = document.getElementById('rangeType').value;
-      document.getElementById('customDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
-    }
-
-    // ==========================================
-    // 頁籤 B: 個股籌碼分佈查詢
-    // ==========================================
-    function searchStockDistribution() {
-      const code = document.getElementById('stockInput').value.trim();
-      if(!code) return;
-      
-      const dates = [...new Set(globalRawData.map(d=>d.date))].sort();
-      const latestDate = dates[dates.length - 1];
-      const matchRows = globalRawData.filter(d => d.date === latestDate && d.stock === code);
-
-      document.getElementById('stockResultCard').style.display = 'block';
-      document.getElementById('stockResultTitle').innerText = `🔍 個股 [${code}] 於全市場 ETF 最新持股加總分佈明細 (${latestDate})`;
-
-      const body = document.getElementById('stockDistBody');
-      body.innerHTML = "";
-
-      if(matchRows.length === 0) {
-        body.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-4">目前市場上無任何 ETF 持有此個股資產。</td></tr>`;
-        return;
-      }
-
-      matchRows.sort((a,b)=>b.volume - a.volume).forEach(r => {
-        body.innerHTML += `
-          <tr>
-            <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${r.etf}</td>
-            <td class="text-end fw-bold">${r.weight.toFixed(2)}%</td>
-            <td class="text-end text-secondary">${Math.round(r.volume).toLocaleString()} 股</td>
-          </tr>
-        `;
-      });
-    }
-
-    // ==========================================
-    // 頁籤 C: 全市場異動總覽
-    // ==========================================
-    function toggleGlobalCustomDates() {
-      const type = document.getElementById('globalRangeType').value;
-      document.getElementById('globalCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
-    }
-
-    function loadGlobalChanges() {
-      const type = document.getElementById('globalRangeType').value;
-      const dates = [...new Set(globalRawData.map(d=>d.date))].sort();
-      const latestDate = dates[dates.length - 1];
-      
-      let compDate = "";
-      if(type === 'custom') {
-        compDate = document.getElementById('globalStartDate').value;
-      } else {
-        let offset = parseInt(type);
-        compDate = dates[Math.max(0, dates.length - 1 - offset)];
-      }
-
-      document.getElementById('globalTitle').innerText = `全市場 ETF 成分股異動排行追蹤 [ 區間：${compDate} ➔ ${latestDate} ]`;
-      const body = document.getElementById('globalTableBody');
-      body.innerHTML = "";
-
-      let hitAny = false;
-      mockEtfs.forEach(etf => {
-        const etfAll = globalRawData.filter(d => d.etf === etf);
-        const curStocks = etfAll.filter(d => d.date === latestDate && isNormalStock(d.stock, d.name));
-        const oldRows = etfAll.filter(d => d.date === compDate);
-
-        curStocks.forEach(r => {
-          let oldVol = oldRows.find(c => c.stock === r.stock)?.volume || 0;
-          let diff = r.volume - oldVol;
-          if(diff !== 0) {
-            hitAny = true;
-            let nature = diff > 0 ? "增加" : "減少";
-            let bStyle = nature === "減少" ? "badge-nature-down" : "badge-nature-up";
-            let tStr = computeContinuousStatus(etfAll, dates, r.stock);
-            
-            body.innerHTML += `
-              <tr>
-                <td><small class="fw-bold">${etf}</small></td>
-                <td><span class="badge-stock-code">${r.stock}</span> <b>${r.name}</b></td>
-                <td><span class="${bStyle}">${nature}</span></td>
-                <td class="text-end fw-bold">${Math.round(diff).toLocaleString()}</td>
-                <td><small>${tStr}</small></td>
-              </tr>
-            `;
-          }
-        });
-      });
-      if(!hitAny) body.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">此區間全市場持倉數量無變動</td></tr>`;
-    }
-
-    // ==========================================
-    // 頁籤 D: 跨市場大加總熱度排行
-    // ==========================================
-    function toggleHeatCustomDates() {
-      const type = document.getElementById('heatRangeType').value;
-      document.getElementById('heatCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
-    }
-
-    function loadMarketHeat() {
-      const type = document.getElementById('heatRangeType').value;
-      const dates = [...new Set(globalRawData.map(d=>d.date))].sort();
-      const latestDate = dates[dates.length - 1];
-      
-      let compDate = "";
-      if(type === 'custom') {
-        compDate = document.getElementById('heatStartDate').value;
-      } else {
-        let offset = parseInt(type);
-        compDate = dates[Math.max(0, dates.length - 1 - offset)];
-      }
-
-      document.getElementById('heatBuyTitle').innerHTML = `<i class="bi bi-graph-up me-2"></i>淨買超前 10 大個股 (${compDate} ~ ${latestDate})`;
-      document.getElementById('heatSellTitle').innerHTML = `<i class="bi bi-graph-down me-2"></i>淨賣超前 10 大個股 (${compDate} ~ ${latestDate})`;
-
-      // 聚合計算每一檔股票的跨市場加總增減
-      let aggregates = {};
-      globalRawData.forEach(r => {
-        if(!isNormalStock(r.stock, r.name)) return;
-        if(!aggregates[r.stock]) aggregates[r.stock] = {code: r.stock, name: r.name, newVol: 0, oldVol: 0};
-        
-        if(r.date === latestDate) aggregates[r.stock].newVol += r.volume;
-        if(r.date === compDate) aggregates[r.stock].oldVol += r.volume;
-      });
-
-      let list = Object.values(aggregates).map(item => {
-        item.diff = item.newVol - item.oldVol;
-        return item;
-      }).filter(item => item.diff !== 0);
-
-      // 淨買超排序
-      let buyTop = [...list].sort((a,b) => b.diff - a.diff).slice(0, 10);
-      // 淨賣超排序
-      let sellTop = [...list].sort((a,b) => a.diff - b.diff).slice(0, 10);
-
-      const bBody = document.getElementById('heatBuyTableBody');
-      bBody.innerHTML = "";
-      buyTop.forEach((item, i) => {
-        bBody.innerHTML += `<tr><td><span class="badge bg-danger">${i+1}</span></td><td>${item.code}</td><td class="fw-bold">${item.name}</td><td class="text-end text-danger fw-bold">+${Math.round(item.diff).toLocaleString()}</td></tr>`;
-      });
-
-      const sBody = document.getElementById('heatSellTableBody');
-      sBody.innerHTML = "";
-      sellTop.forEach((item, i) => {
-        sBody.innerHTML += `<tr><td><span class="badge bg-teal" style="background-color:#0f766e;">${i+1}</span></td><td>${item.code}</td><td class="fw-bold">${item.name}</td><td class="text-end text-success fw-bold">${Math.round(item.diff).toLocaleString()}</td></tr>`;
-      });
-    }
-
-    // ==========================================
-    // 頁籤 E: 多檔 ETF 權重交叉矩陣比較
-    // ==========================================
-    function initCompareCheckboxes() {
-      const boxContainer = document.getElementById('compareEtfCheckboxes');
-      boxContainer.innerHTML = "";
-      mockEtfs.forEach(etf => {
-        boxContainer.innerHTML += `
-          <div class="form-check form-check-inline me-3 py-1">
-            <input class="form-check-input etf-compare-cb" type="checkbox" value="${etf}" id="cb-${etf}" checked>
-            <label class="form-check-label fw-bold" for="cb-${etf}">${etf}</label>
-          </div>
-        `;
-      });
-    }
-
-    function generateComparison() {
-      const checkboxes = document.querySelectorAll('.etf-compare-cb:checked');
-      const selectedCompareEtfs = Array.from(checkboxes).map(cb => cb.value);
-
-      if(selectedCompareEtfs.length === 0) {
-        alert("請至少勾選一檔 ETF 進行矩陣比較！");
-        return;
-      }
-
-      const dates = [...new Set(globalRawData.map(d=>d.date))].sort();
-      const latestDate = dates[dates.length - 1];
-
-      // 重繪 Table Header
-      const headerRow = document.getElementById('compareTableHeader');
-      headerRow.innerHTML = `<th>股票代號</th><th>股票名稱</th>`;
-      selectedCompareEtfs.forEach(etf => {
-        headerRow.innerHTML += `<th class="text-end" style="min-width:110px;">${etf.split(' ')[0]} 權重</th>`;
-      });
-
-      // 收集這些 ETF 持有的聯集股票代碼
-      let stockMap = {};
-      globalRawData.forEach(r => {
-        if(r.date === latestDate && selectedCompareEtfs.includes(r.etf) && isNormalStock(r.stock, r.name)) {
-          stockMap[r.stock] = r.name;
-        }
-      });
-
-      const body = document.getElementById('compareTableBody');
-      body.innerHTML = "";
-
-      Object.keys(stockMap).forEach(code => {
-        let rowHtml = `<tr><td><span class="badge-stock-code">${code}</span></td><td class="fw-bold">${stockMap[code]}</td>`;
-        
-        selectedCompareEtfs.forEach(etf => {
-          let match = globalRawData.find(r => r.date === latestDate && r.etf === etf && r.stock === code);
-          let w = match ? match.weight : 0;
-          rowHtml += `<td class="text-end ${w > 0 ? 'text-primary fw-bold' : 'text-muted'}">${w > 0 ? w.toFixed(2)+'%' : '-'}</td>`;
-        });
-        
-        rowHtml += `</tr>`;
-        body.innerHTML += rowHtml;
-      });
-    }
-  </script>
-</body>
-</html>
+            <div class="col-md-3">
+              <button class="btn btn-danger w-
