@@ -349,40 +349,28 @@ def main():
               <div class="col-lg-9">
                 
                 <div id="metaContainer" class="row g-3 mb-4" style="display: none;">
-                  <div class="col-6 col-md-2">
-                    <div class="meta-card" style="border-left-color: #4a5568;">
-                      <div class="meta-label">昨收價</div>
-                      <div class="meta-value" id="metaLastClose">-</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-2">
-                    <div class="meta-card" style="border-left-color: #e53e3e;">
-                      <div class="meta-label">漲跌</div>
-                      <div class="meta-value" id="metaChange">-</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-2">
+                  <div class="col-6 col-md-3">
                     <div class="meta-card" style="border-left-color: #3182ce;">
                       <div class="meta-label">市價</div>
                       <div class="meta-value" id="metaMarketPrice">-</div>
                     </div>
                   </div>
-                  <div class="col-6 col-md-2">
-                    <div class="meta-card" style="border-left-color: #dd6b20;">
-                      <div class="meta-label">股數</div>
-                      <div class="meta-value" id="metaAmount">-</div>
+                  <div class="col-6 col-md-3">
+                    <div class="meta-card" style="border-left-color: #e53e3e;">
+                      <div class="meta-label">漲跌</div>
+                      <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
-                  <div class="col-6 col-md-2">
-                    <div class="meta-card" style="border-left-color: #805ad5;">
-                      <div class="meta-label">規模</div>
-                      <div class="meta-value" id="metaSize">-</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md-2">
+                  <div class="col-6 col-md-3">
                     <div class="meta-card" style="border-left-color: #319795;">
                       <div class="meta-label">折溢價</div>
                       <div class="meta-value" id="metaPremium">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md-3">
+                    <div class="meta-card" style="border-left-color: #805ad5;">
+                      <div class="meta-label">規模</div>
+                      <div class="meta-value" id="metaSize">-</div>
                     </div>
                   </div>
                 </div>
@@ -588,7 +576,7 @@ def main():
                         <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr>
                       </thead>
                       <tbody id="heatSellTableBody">
-                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析`」載入數據</td></tr>
+                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -631,7 +619,7 @@ def main():
         </div>
       </div>
 
-      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bundle.min.js"></script>
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
@@ -694,7 +682,6 @@ def main():
             let activeBtn = document.getElementById(`btn-${etfName}`);
             if(activeBtn) activeBtn.classList.add('active');
 
-            // 🛠️ 更正邏輯核心點：修正時間排序，確保精準抓取資料庫內最新日期基準日
             let etfData = globalRawData.filter(d => d.etf === etfName);
             let sortedDates = [...new Set(etfData.map(d => d.date))].sort((a, b) => new Date(a) - new Date(b));
             let latestDate = sortedDates[sortedDates.length - 1];
@@ -708,7 +695,6 @@ def main():
             };
 
             document.getElementById('metaContainer').style.display = 'flex';
-            document.getElementById('metaLastClose').innerText = getMeta("昨收價");
             document.getElementById('metaChange').innerText = getMeta("漲跌");
             document.getElementById('metaMarketPrice').innerText = getMeta("市價");
             document.getElementById('metaPremium').innerText = getMeta("折溢價") + "%";
@@ -718,9 +704,6 @@ def main():
 
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
-
-            let totalStockVol = stocks.reduce((s, r) => s + Number(r.volume), 0);
-            document.getElementById('metaAmount').innerText = totalStockVol.toLocaleString() + " 股";
 
             document.getElementById('stockTableBody').innerHTML = stocks.map(r => `
                 <tr>
@@ -879,7 +862,6 @@ def main():
             if(activeEtf) selectEtf(activeEtf);
         }
 
-        // 其餘分佈、全市場異動、交叉比較等邏輯字字未改，完全保留不變
         function searchStockDistribution() {
             let target = document.getElementById('stockInput').value.trim();
             if(!target) return;
