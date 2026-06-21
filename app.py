@@ -166,8 +166,7 @@ def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
 
 
 # ==============================================================================
-# 4. 【後端真實資料打包】
-#    從試算表抓取並過濾完畢後的真數據，直接轉換為前端所需的 JSON 結構。
+# 4. 【後端真實資料打包】(已修正：確保轉出標準不帶引號的 JS Array 結構)
 # ==============================================================================
 def fetch_backend_data_from_python():
     raw_data, err_msg = fetch_raw_sheet_data()
@@ -177,8 +176,9 @@ def fetch_backend_data_from_python():
     if clean_err or df.empty:
         return None
     
-    # 轉換成 JSON 字典格式供前端調用
-    return df.to_json(orient="records", force_ascii=False)
+    # 【核心修改點】將 DataFrame 轉成 Python 字典列表，再透過 json.dumps 轉成符合 JS 陣列語法的字串
+    records = df.to_dict(orient="records")
+    return json.dumps(records, ensure_ascii=False)
 
 
 # ==============================================================================
