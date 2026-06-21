@@ -159,13 +159,19 @@ def standardize_df(df):
             
     df = df.rename(columns=rename_dict)
     
-    # 向量化清洗
+    # 💥 容錯優化：解決空字串與留白引發的 float 轉型錯誤
     df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-    df['weight'] = df['weight'].astype(str).str.replace('%', '').str.replace(',', '').astype(float)
+    
+    # 清洗權重欄位 (移除 % 與千分號，並容錯空值)
+    df['weight'] = df['weight'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False).str.strip()
+    df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(0.0)
     if df['weight'].max() <= 1.0: 
         df['weight'] = df['weight'] * 100
         
-    df['volume'] = df['volume'].astype(str).str.replace(',', '').astype(float).fillna(0)
+    # 清洗持有數量欄位 (移除千分號，並容錯空值)
+    df['volume'] = df['volume'].astype(str).str.replace(',', '', regex=False).str.strip()
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0.0)
+    
     df['stock'] = df['stock'].astype(str).str.strip()
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
@@ -290,7 +296,6 @@ def get_all_global_changes(df, range_type, start_date=None, end_date=None):
         suffixes=('_new', '_old')
     ).fillna(0)
     
-    # 修正過後的安全對照與填補機制
     for col in ['etf', 'stock', 'name']:
         if col == 'etf':
             fill_val = df_merged['etf_stock'].str.split('_').str[0]
