@@ -6,89 +6,128 @@ import json
 import os
 
 # ==========================================
-# 1. 網頁基本設定與全安全客製化 CSS 注入
+# 1. 網頁基本設定與全真 UI 視覺美化 CSS 注入
 # ==========================================
 st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide")
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
 
-# 使用純內建 CSS 機制，移除外部 Link 避免干擾 React 前端
+# 全方位注入對齊截圖質感的客製化 CSS 樣式
 st.markdown("""
     <style>
-        /* 全域清爽白底與字體規範 */
+        /* 全域清爽底色與字體規範 */
         html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            font-family: 'Helvetica Neue', Arial, 'Noto Sans TC', sans-serif !important;
-            background-color: #f8f9fa !important;
-            color: #333333 !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif !important;
+            background-color: #f3f4f6 !important;
+            color: #1f2937 !important;
         }
         
-        /* 區塊白底高質感卡片 */
+        /* 區塊高質感白底外殼 */
         .white-panel-card {
             background-color: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            padding: 16px;
-            margin-bottom: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 1.2rem;
             box-shadow: 0 1px 3px rgba(0,0,0,0.02);
         }
         
-        /* 區塊小標題 */
+        /* 區塊標題樣式 */
         .panel-title {
             font-size: 0.95rem;
             font-weight: 700;
-            color: #2d3748;
-            margin-bottom: 12px;
+            color: #1e293b;
+            margin-bottom: 14px;
             display: flex;
             align-items: center;
+            gap: 6px;
         }
         
-        /* 頂部 6 聯排獨立彩色頂邊框卡片 */
+        /* 頂部 6 聯排獨立彩色頂條指標卡片 */
         .meta-box {
             background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 4px;
-            padding: 12px 10px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 12px 8px;
             text-align: center;
-            margin-bottom: 1rem;
+            margin-bottom: 1.2rem;
             box-shadow: 0 1px 2px rgba(0,0,0,0.01);
         }
         .meta-title {
             font-size: 0.8rem;
-            color: #718096;
-            margin-bottom: 4px;
+            color: #64748b;
+            margin-bottom: 6px;
             font-weight: 500;
         }
         .meta-num {
-            font-size: 1.2rem;
+            font-size: 1.25rem;
             font-weight: 700;
-            color: #1a202c;
-            min-height: 28px;
+            color: #0f172a;
+            min-height: 30px;
         }
         
-        /* 底部深色緞帶明細表頭 */
+        /* 底部深色高質感 Banner */
         .dark-ribbon-header {
-            background-color: #1a202c;
+            background-color: #1e293b;
             color: #ffffff;
-            padding: 12px 16px;
+            padding: 12px 18px;
             font-weight: 700;
-            font-size: 0.9rem;
-            border-top-left-radius: 6px;
-            border-top-right-radius: 6px;
+            font-size: 0.92rem;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
         
-        /* 區間標籤美化 */
+        /* 區間分析標籤 */
         .date-badge {
-            background-color: #edf2f7;
-            color: #2d3748;
-            padding: 2px 8px;
-            border-radius: 4px;
+            background-color: #f1f5f9;
+            color: #334155;
+            padding: 3px 10px;
+            border-radius: 5px;
             font-weight: 600;
-            border: 1px solid #cbd5e0;
+            border: 1px solid #cbd5e1;
             font-size: 0.85rem;
+        }
+
+        /* 完美還原圖二：左側單選清單卡片化美化 */
+        div[data-testid="stRadio"] > div[role="radiogroup"] {
+            gap: 6px !important;
+            background: transparent !important;
+        }
+        div[data-testid="stRadio"] [data-testid="stWidgetLabel"] {
+            display: none !important;
+        }
+        div[data-testid="stRadio"] label {
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            border-radius: 6px !important;
+            padding: 10px 14px !important;
+            margin: 0 !important;
+            width: 100% !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        div[data-testid="stRadio"] label:hover {
+            background-color: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+        }
+        /* 被選中的藍底高質感狀態 */
+        div[data-testid="stRadio"] label[data-checked="true"] {
+            background-color: #1e3a8a !important; 
+            border-color: #1e3a8a !important;
+        }
+        div[data-testid="stRadio"] label[data-checked="true"] span {
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+        /* 隱藏原生的醜圓圈單選鈕 */
+        div[data-testid="stRadio"] label > div:first-child {
+            display: none !important;
         }
         
         #MainMenu {visibility: hidden;}
@@ -97,7 +136,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 獨立安全的連線與資料載入核心 (快取內絕不含 UI 元件)
+# 2. 獨立安全的連線與資料載入核心 (快取安全防護)
 # ==========================================
 def get_sheets_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
@@ -121,8 +160,7 @@ def get_sheets_client():
 def init_gspread():
     try:
         gc = get_sheets_client()
-        if gc: 
-            return gc.open(SHEET_NAME)
+        if gc: return gc.open(SHEET_NAME)
     except:
         pass
     return None
@@ -131,24 +169,21 @@ sh = init_gspread()
 
 @st.cache_data(ttl=300)
 def fetch_raw_sheet_data():
-    """純粹撈取資料，若失敗回傳 None 與錯誤訊息，不呼叫任何 st.error"""
     if not sh: 
-        return None, "無法連線至 Google 試算表，請檢查憑證設定。"
+        return None, "無法連線至 Google 試算表，請檢查憑證與網路設定。"
     try:
         ws = sh.worksheet(WORKSHEET_HISTORY)
         raw_data = ws.get_all_values()
         if not raw_data or len(raw_data) < 2:
-            return None, f"工作表「{WORKSHEET_HISTORY}」內沒有足夠的數據列。"
+            return None, f"工作表「{WORKSHEET_HISTORY}」內無有效資料數據。"
         return raw_data, None
     except Exception as e:
         return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
 
 def process_and_standardize(raw_data):
-    """標準化清洗資料，精準對齊使用者的實際欄位名稱"""
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 🎯 精準對齊您的試算表欄位名稱
     alias_map = {
         "etf": ["ETF代號", "ETF", "ETF碼"],
         "date": ["日期", "時間", "Date"],
@@ -167,12 +202,10 @@ def process_and_standardize(raw_data):
                 
     df = df.rename(columns=rename_dict)
     
-    # 檢查核心轉換是否成功，避免後續運算發生 KeyError
     missing = [k for k in ["etf", "date", "stock", "weight", "volume"] if k not in df.columns]
     if missing:
-        return pd.DataFrame(), f"主要欄位對照失敗。請確認工作表首行是否包含您的預設欄位。缺少對應: {missing}"
+        return pd.DataFrame(), f"主要欄位對照失敗，缺少必要屬性: {missing}"
 
-    # 資料格式安全清洗
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
     df = df.dropna(subset=['date'])
     
@@ -220,55 +253,53 @@ def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
     return status_dict
 
 # ==========================================
-# 3. 主 UI 執行緒面板渲染 (安全攔截機制)
+# 3. 主 UI 執行緒渲染
 # ==========================================
 def main():
-    # 讀取最原始試算表陣列
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
         st.error(err_msg)
         return
         
-    # 在非快取區清洗資料
     df, clean_err = process_and_standardize(raw_data)
     if clean_err:
         st.error(clean_err)
         return
         
     if df.empty:
-        st.info("💡 試算表目前為空，或日期轉換後無有效數據。")
+        st.info("💡 試算表中目前無有效數據。")
         return
 
-    # 取得不重複的 ETF 清單
     etf_list = sorted(df['etf'].dropna().unique().tolist())
-    if not etf_list:
-        st.warning("⚠️ 未在「ETF代號」欄位中偵測到任何資料。")
-        return
 
     # 建立左右不對稱版面佈局 (左選單 1.1 : 右主頁面 3.5)
     main_left, main_right = st.columns([1.1, 3.5])
 
     # ------------------------------------------
-    # 左側控制台：請選擇 ETF 代號
+    # 左側控制台：圖二高質感單選列表
     # ------------------------------------------
     with main_left:
-        st.markdown('<div class="panel-title"><b>::: 請選擇 ETF 代號</b></div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><b>📋 請選擇 ETF 代號</b></div>', unsafe_allow_html=True)
         search_query = st.text_input("輸入關鍵字篩選...", placeholder="輸入關鍵字篩選...", label_visibility="collapsed", key="left_filter")
         
-        filtered_etfs = [e for e in etf_list if search_query.lower() in e.lower()] if search_query else etf_list
+        # 篩選相符的 ETF
+        matched_etfs = [e for e in etf_list if search_query.lower() in e.lower()] if search_query else etf_list
         
-        if filtered_etfs:
-            selected_etf = st.radio("ETF清單列表", filtered_etfs, label_visibility="collapsed", key="left_etf_radio")
+        if matched_etfs:
+            # 加上書籤小圖示供卡片顯示
+            display_list = [f"📄 {e}" for e in matched_etfs]
+            selected_display = st.radio("ETF清單列表", display_list, label_visibility="collapsed", key="left_etf_radio")
+            selected_etf = selected_display.replace("📄 ", "")
         else:
             st.write("<small style='color:gray;'>無相符結果</small>", unsafe_allow_html=True)
             selected_etf = None
 
     # ------------------------------------------
-    # 右側主控制台：核心大數據監控
+    # 右側主控制台：核心大數據監控看板
     # ------------------------------------------
     with main_right:
         if not selected_etf:
-            st.info("💡 請在左側選單選擇或篩選出欲查看的 ETF 代號。")
+            st.info("💡 請在左側選單選擇欲查看的 ETF 代號。")
             return
             
         df_etf = df[df['etf'] == selected_etf].copy()
@@ -278,8 +309,92 @@ def main():
             
         sorted_dates = sorted(df_etf['date'].unique())
         latest_date = sorted_dates[-1]
+        df_latest = df_etf[df_etf['date'] == latest_date]
 
-        # 頂部控制面板：籌碼比較天數 / 範圍
+        # 1. 頂部 6 聯排獨立精緻指標卡片
+        def fetch_meta_val(key_name):
+            val_set = df_latest[df_latest['stock'] == key_name]['volume'].values
+            if len(val_set) > 0 and str(val_set[0]).strip() != "":
+                try: return f"{int(float(val_set[0])):,}"
+                except: return str(val_set[0])
+            return "-"
+
+        is_stock = is_global_stock_code(df_latest)
+        stocks_df = df_latest[is_stock].sort_values(by='weight', ascending=False).copy()
+        assets_df = df_latest[~is_stock].copy()
+
+        mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+        mc1.markdown(f'<div class="meta-box" style="border-top: 3px solid #64748b;"><div class="meta-title">昨收價</div><div class="meta-num">{fetch_meta_val("昨收價")}</div></div>', unsafe_allow_html=True)
+        mc2.markdown(f'<div class="meta-box" style="border-top: 3px solid #ef4444;"><div class="meta-title">漲跌</div><div class="meta-num">{fetch_meta_val("漲跌")}</div></div>', unsafe_allow_html=True)
+        mc3.markdown(f'<div class="meta-box" style="border-top: 3px solid #3b82f6;"><div class="meta-title">市價</div><div class="meta-num">{fetch_meta_val("市價")}</div></div>', unsafe_allow_html=True)
+        
+        stock_vol_str = fetch_meta_val("股數") if "股數" in df_latest['stock'].values else f"{int(stocks_df['volume'].sum()):,}" if not stocks_df.empty else "-"
+        mc4.markdown(f'<div class="meta-box" style="border-top: 3px solid #f97316;"><div class="meta-title">股數</div><div class="meta-num">{stock_vol_str}</div></div>', unsafe_allow_html=True)
+        mc5.markdown(f'<div class="meta-box" style="border-top: 3px solid #a855f7;"><div class="meta-title">規模</div><div class="meta-num">{fetch_meta_val("規模")}</div></div>', unsafe_allow_html=True)
+        mc6.markdown(f'<div class="meta-box" style="border-top: 3px solid #14b8a6;"><div class="meta-title">折溢價</div><div class="meta-num">{fetch_meta_val("折溢價")}</div></div>', unsafe_allow_html=True)
+
+        # 2. 中層雙表格佈局 (還原圖一：內嵌小白色代號藥丸外殼)
+        sub_col1, sub_col2 = st.columns([2.1, 1.1])
+        
+        with sub_col1:
+            st.markdown('<div class="panel-title"><b>📋 最新成分股持股明細</b></div>', unsafe_allow_html=True)
+            left_table_html = """
+            <div style="max-height:330px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:6px; background:white;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.88rem; text-align:left;">
+                <thead>
+                    <tr style="border-bottom:2px solid #e2e8f0; color:#64748b; font-weight:600; background:#f8fafc; position:sticky; top:0;">
+                        <th style="padding:10px 14px;">股票代號</th>
+                        <th style="padding:10px 14px;">股票名稱</th>
+                        <th style="padding:10px 14px; text-align:right;">持股權重</th>
+                        <th style="padding:10px 14px; text-align:right;">最新持股(股)</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            for _, row in stocks_df.iterrows():
+                left_table_html += f"""
+                    <tr style="border-bottom:1px solid #f1f5f9; color:#334155;">
+                        <td style="padding:10px 14px;"><span style="border:1px solid #cbd5e1; background:#ffffff; border-radius:4px; padding:2px 7px; font-family:monospace; font-size:0.82rem; color:#475569; font-weight:500;">{row['stock']}</span></td>
+                        <td style="padding:10px 14px; font-weight:500; color:#0f172a;">{row['name']}</td>
+                        <td style="padding:10px 14px; text-align:right; font-weight:500;">{row['weight']:.2f}%</td>
+                        <td style="padding:10px 14px; text-align:right; color:#475569;">{int(row['volume']):,} 股</td>
+                    </tr>
+                """
+            left_table_html += "</tbody></table></div>"
+            st.markdown(left_table_html, unsafe_allow_html=True)
+            
+        with sub_col2:
+            st.markdown('<div class="panel-title"><b>🔒 非股票資產項目</b></div>', unsafe_allow_html=True)
+            right_table_html = """
+            <div style="max-height:330px; overflow-y:auto; border:1px solid #e5e7eb; border-radius:6px; background:white;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.88rem; text-align:left;">
+                <thead>
+                    <tr style="border-bottom:2px solid #e2e8f0; color:#64748b; font-weight:600; background:#f8fafc; position:sticky; top:0;">
+                        <th style="padding:10px 14px;">資產代號</th>
+                        <th style="padding:10px 14px;">資產項目</th>
+                        <th style="padding:10px 14px; text-align:right;">權重</th>
+                        <th style="padding:10px 14px; text-align:right;">資產價值(股)</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            for _, row in assets_df.iterrows():
+                vol_str = f"{int(row['volume']):,}" if row['volume'] != 0 else "-"
+                weight_str = f"{row['weight']:.2f}%" if row['weight'] != 0 else "%"
+                right_table_html += f"""
+                    <tr style="border-bottom:1px solid #f1f5f9; color:#334155;">
+                        <td style="padding:10px 14px;"><span style="border:1px solid #cbd5e1; background:#ffffff; border-radius:4px; padding:2px 7px; font-family:monospace; font-size:0.82rem; color:#475569;">{row['stock']}</span></td>
+                        <td style="padding:10px 14px; font-size:0.82rem; color:#64748b; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{row['name']}</td>
+                        <td style="padding:10px 14px; text-align:right;">{weight_str}</td>
+                        <td style="padding:10px 14px; text-align:right; color:#475569;">{vol_str}</td>
+                    </tr>
+                """
+            right_table_html += "</tbody></table></div>"
+            st.markdown(right_table_html, unsafe_allow_html=True)
+
+        st.write("<div style='margin-bottom: 25px;'></div>", unsafe_allow_html=True)
+
+        # 3. 🎯 【重組移位】圖四：籌碼比較天數/範圍控制區（精準插入至正中間）
         st.markdown('<div class="white-panel-card">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><b>🗃️ 籌碼比較天數 / 範圍邏輯</b></div>', unsafe_allow_html=True)
         
@@ -298,72 +413,12 @@ def main():
             compare_date = sorted_dates[compare_index]
             
         with ctrl_c2:
-            st.button("🧮 重新計算籌碼", use_container_width=True)
+            st.button("🗓️ 重新計算籌碼", use_container_width=True)
             
-        st.markdown(f'<p style="font-size:0.85rem; color:#4a5568; margin: 6px 0 0 0;">📊 <b>籌碼分析區間：</b> 比較日 <span class="date-badge">{compare_date}</span> ➔ 基準日 <span class="date-badge">{latest_date}</span></p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="font-size:0.85rem; color:#475569; margin: 8px 0 0 0;">📊 <b>籌碼分析區間：</b> 比較日 <span class="date-badge">{compare_date}</span> ➔ 基準日 <span class="date-badge">{latest_date}</span></p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # 擷取最新日期的指標資料
-        df_latest = df_etf[df_etf['date'] == latest_date]
-        
-        def fetch_meta_val(key_name):
-            val_set = df_latest[df_latest['stock'] == key_name]['volume'].values
-            if len(val_set) > 0 and str(val_set[0]).strip() != "":
-                try:
-                    return f"{int(float(val_set[0])):,}"
-                except:
-                    return str(val_set[0])
-            return "-"
-
-        is_stock = is_global_stock_code(df_latest)
-        stocks_df = df_latest[is_stock].sort_values(by='weight', ascending=False).copy()
-        assets_df = df_latest[~is_stock].copy()
-
-        # 頂部 6 聯排獨立彩色頂邊框
-        mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-        mc1.markdown(f'<div class="meta-box" style="border-top: 3px solid #718096;"><div class="meta-title">昨收價</div><div class="meta-num">{fetch_meta_val("昨收價")}</div></div>', unsafe_allow_html=True)
-        mc2.markdown(f'<div class="meta-box" style="border-top: 3px solid #e53e3e;"><div class="meta-title">漲跌</div><div class="meta-num">{fetch_meta_val("漲跌")}</div></div>', unsafe_allow_html=True)
-        mc3.markdown(f'<div class="meta-box" style="border-top: 3px solid #3182ce;"><div class="meta-title">市價</div><div class="meta-num">{fetch_meta_val("市價")}</div></div>', unsafe_allow_html=True)
-        
-        stock_vol_str = fetch_meta_val("股數") if "股數" in df_latest['stock'].values else f"{int(stocks_df['volume'].sum()):,}" if not stocks_df.empty else "-"
-        mc4.markdown(f'<div class="meta-box" style="border-top: 3px solid #dd6b20;"><div class="meta-title">股數</div><div class="meta-num">{stock_vol_str}</div></div>', unsafe_allow_html=True)
-        mc5.markdown(f'<div class="meta-box" style="border-top: 3px solid #805ad5;"><div class="meta-title">規模</div><div class="meta-num">{fetch_meta_val("規模")}</div></div>', unsafe_allow_html=True)
-        mc6.markdown(f'<div class="meta-box" style="border-top: 3px solid #319795;"><div class="meta-title">折溢價</div><div class="meta-num">{fetch_meta_val("折溢價")}</div></div>', unsafe_allow_html=True)
-
-        # 中層雙表格佈局
-        sub_col1, sub_col2 = st.columns([2.1, 1.1])
-        
-        with sub_col1:
-            st.markdown('<div class="panel-title"><b>📋 最新成分股持股明細</b></div>', unsafe_allow_html=True)
-            st.dataframe(
-                stocks_df[['stock', 'name', 'weight', 'volume']],
-                use_container_width=True,
-                hide_index=True,
-                height=320,
-                column_config={
-                    "stock": st.column_config.TextColumn("股票代號"),
-                    "name": "股票名稱",
-                    "weight": st.column_config.NumberColumn("持股權重", format="%.2f%%"),
-                    "volume": st.column_config.NumberColumn("最新持股(股)", format="%d 股")
-                }
-            )
-            
-        with sub_col2:
-            st.markdown('<div class="panel-title"><b>🔒 非股票資產項目</b></div>', unsafe_allow_html=True)
-            st.dataframe(
-                assets_df[['stock', 'name', 'weight', 'volume']],
-                use_container_width=True,
-                hide_index=True,
-                height=320,
-                column_config={
-                    "stock": "資產代號",
-                    "name": "資產項目",
-                    "weight": st.column_config.TextColumn("權重"),
-                    "volume": st.column_config.NumberColumn("資產價值(股)", format="%d")
-                }
-            )
-
-        # 底部高質感深色動態分析看板
+        # 4. 底層高質感深色動態籌碼分析看板（還原圖三：綠底減少標籤與淡黃連續買賣狀態）
         st.markdown(f"""
             <div class="dark-ribbon-header">
                 <span>⚡ 動態籌碼異動計算與連續狀態追蹤</span>
@@ -371,7 +426,6 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-        # 提取對比歷史數據
         df_comp = df_etf[df_etf['date'] == compare_date]
         df_merged = pd.merge(
             stocks_df[['stock', 'name', 'volume']], 
@@ -392,24 +446,54 @@ def main():
                 return "刪除"
             df_change['nature'] = df_change.apply(judge_nature, axis=1)
             
-            # 動態狀態追蹤計算
             status_map = calculate_continuous_status(df_etf[is_global_stock_code(df_etf)], sorted_dates, 'stock')
             df_change['continuousStatus'] = df_change['stock'].map(status_map)
             
-            st.dataframe(
-                df_change[['stock', 'name', 'nature', 'diff', 'continuousStatus']],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "stock": "成分股",
-                    "name": "股票名稱",
-                    "nature": "異動性質",
-                    "diff": st.column_config.NumberColumn("區間增減股數", format="%d 股"),
-                    "continuousStatus": "核心歷史連續買賣狀態"
-                }
-            )
+            # 使用高階 HTML 渲染完美契合圖三外觀
+            bottom_table_html = """
+            <div style="border:1px solid #e5e7eb; border-top:none; border-bottom-left-radius:8px; border-bottom-right-radius:8px; background:white; overflow:hidden;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.88rem; text-align:left;">
+                <thead>
+                    <tr style="border-bottom:2px solid #e2e8f0; color:#64748b; font-weight:600; background:#f8fafc;">
+                        <th style="padding:12px 16px;">成分股</th>
+                        <th style="padding:12px 16px;">異動性質</th>
+                        <th style="padding:12px 16px; text-align:right;">區間增減股數</th>
+                        <th style="padding:12px 16px;">核心歷史連續買賣狀態</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            for _, row in df_change.iterrows():
+                nature = row['nature']
+                # 依據性質配置顏色 (圖三中 減少為深綠/藍綠色標籤與字體)
+                if nature == "減少":
+                    badge_style = "background-color:#0f766e; color:white; padding:3px 8px; border-radius:4px; font-size:0.78rem; font-weight:600;"
+                    diff_style = "color:#0f766e; text-align:right; font-weight:600;"
+                else:
+                    badge_style = "background-color:#dc2626; color:white; padding:3px 8px; border-radius:4px; font-size:0.78rem; font-weight:600;"
+                    diff_style = "color:#dc2626; text-align:right; font-weight:600;"
+                
+                # 處理狀態淡黃色標籤
+                status_str = row['continuousStatus']
+                if "賣" in status_str:
+                    status_html = f'<span style="background-color:#fef3c7; color:#92400e; padding:4px 12px; border-radius:4px; font-weight:600; font-size:0.82rem; border:1px solid #fde68a;">📉 {status_str}</span>'
+                elif "買" in status_str:
+                    status_html = f'<span style="background-color:#dcfce7; color:#166534; padding:4px 12px; border-radius:4px; font-weight:600; font-size:0.82rem; border:1px solid #bbf7d0;">📈 {status_str}</span>'
+                else:
+                    status_html = f'<span style="color:#64748b;">{status_str}</span>'
+                    
+                bottom_table_html += f"""
+                    <tr style="border-bottom:1px solid #f1f5f9; color:#334155;">
+                        <td style="padding:14px 16px; font-weight:700; color:#0f172a;">{row['stock']} <span style="font-weight:400; color:#475569; margin-left:6px;">{row['name']}</span></td>
+                        <td style="padding:14px 16px;"><span style="{badge_style}">{nature}</span></td>
+                        <td style="padding:14px 16px; {diff_style}">{int(row['diff']):,} 股</td>
+                        <td style="padding:14px 16px;">{status_html}</td>
+                    </tr>
+                """
+            bottom_table_html += "</tbody></table></div>"
+            st.markdown(bottom_table_html, unsafe_allow_html=True)
         else:
-            st.info("💡 該對比區間內，此 ETF 成分股持倉數量未發生任何增減變動。")
+            st.markdown('<div style="padding:20px; border:1px solid #e5e7eb; border-top:none; background:white; text-align:center; color:gray;">💡 該對比區間內，此 ETF 成分股持倉數量未發生任何變動。</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
