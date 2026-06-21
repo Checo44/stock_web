@@ -172,7 +172,7 @@ def fetch_backend_data_to_json():
     return json.dumps(records, ensure_ascii=False)
 
 # ==========================================
-# 4. 主渲染邏輯（使用標準字串避免大括號衝突）
+# 4. 主渲染邏輯
 # ==========================================
 def main():
     json_data = fetch_backend_data_to_json()
@@ -288,7 +288,6 @@ def main():
           font-weight: bold;
           font-size: 0.85rem;
         }
-        /* 👈 修正點 1：新增（亮金橘喜氣色）、刪除（黑灰底色）的獨立標籤樣式 */
         .badge-nature-new { background-color: #f97316; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-up { background-color: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-down { background-color: #0f766e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
@@ -589,7 +588,7 @@ def main():
                         <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr>
                       </thead>
                       <tbody id="heatSellTableBody">
-                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
+                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析`」載入數據</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -695,8 +694,9 @@ def main():
             let activeBtn = document.getElementById(`btn-${etfName}`);
             if(activeBtn) activeBtn.classList.add('active');
 
+            // 🛠️ 更正邏輯核心點：修正時間排序，確保精準抓取資料庫內最新日期基準日
             let etfData = globalRawData.filter(d => d.etf === etfName);
-            let sortedDates = [...new Set(etfData.map(d => d.date))].sort();
+            let sortedDates = [...new Set(etfData.map(d => d.date))].sort((a, b) => new Date(a) - new Date(b));
             let latestDate = sortedDates[sortedDates.length - 1];
 
             let latestRows = etfData.filter(d => d.date === latestDate);
@@ -759,15 +759,13 @@ def main():
             let currentStocks = etfData.filter(d => d.date === latestDate && isNormalStock(d.stock, d.name));
             let compRows = etfData.filter(d => d.date === compareDate);
 
-            // 👈 修正點 2：高穩定、絕不留空的連續買賣狀態逆向掃描計算
             let trendMap = {};
             if (sortedDates.length >= 2) {
                 let uniqStocks = [...new Set(etfData.filter(d => isNormalStock(d.stock, d.name)).map(d => d.stock))];
                 uniqStocks.forEach(sCode => {
                     let streakCount = 0;
-                    let currentTrend = null; // "買" or "賣"
+                    let currentTrend = null;
 
-                    // 從最後一天（最新）開始往前逆向掃描歷史
                     for (let i = sortedDates.length - 1; i > 0; i--) {
                         let dNew = sortedDates[i];
                         let dOld = sortedDates[i - 1];
@@ -777,18 +775,18 @@ def main():
                         let diff = vNew - vOld;
 
                         if (diff === 0) {
-                            break; // 只要有一天無任何增減變動，連續狀態即被中斷
+                            break;
                         }
 
                         let dayTrend = diff > 0 ? "買" : "賣";
 
                         if (currentTrend === null) {
-                            currentTrend = dayTrend; // 錨定最新一天的方向
+                            currentTrend = dayTrend;
                             streakCount = 1;
                         } else if (dayTrend === currentTrend) {
-                            streakCount++; // 方向相同，連續計數加 1
+                            streakCount++;
                         } else {
-                            break; // 一旦反轉，立即中斷
+                            break;
                         }
                     }
 
@@ -812,18 +810,17 @@ def main():
                 if (diff !== 0) {
                     let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
                     
-                    // 👈 修正點 1：全新顏色配置（新增:喜氣橘紅，增加:大紅，減少:藍綠）
                     let badge = "";
                     let dStyle = "";
                     if (nature === "新增") {
                         badge = `<span class="badge-nature-new">${nature}</span>`;
-                        dStyle = "color:#ea580c;"; // 喜氣亮橘紅
+                        dStyle = "color:#ea580c;";
                     } else if (nature === "增加") {
                         badge = `<span class="badge-nature-up">${nature}</span>`;
-                        dStyle = "color:#dc2626;"; // 大紅
+                        dStyle = "color:#dc2626;";
                     } else {
                         badge = `<span class="badge-nature-down">${nature}</span>`;
-                        dStyle = "color:#0f766e;"; // 藍綠
+                        dStyle = "color:#0f766e;";
                     }
                     
                     let trendStr = trendMap[r.stock] || "無變動";
@@ -849,9 +846,8 @@ def main():
                 if (isNormalStock(r.stock, r.name)) {
                     let isStillExist = currentStocks.some(c => c.stock === r.stock);
                     if (!isStillExist && r.volume > 0) {
-                        // 👈 修正點 1：刪除改為極具質感的黑灰底色
                         let badge = `<span class="badge-nature-delete">刪除</span>`;
-                        let dStyle = "color:#4b5563;"; // 灰黑色字體
+                        let dStyle = "color:#4b5563;";
                         let diff = -r.volume;
                         
                         let trendStr = trendMap[r.stock] || "無變動";
@@ -870,7 +866,6 @@ def main():
                 }
             });
 
-            // 👈 依據指定順序串接：新增 -> 增加 -> 減少 -> 刪除
             let changeHtml = htmlNew + htmlAdd + htmlSub + htmlDel;
             document.getElementById('changeTableBody').innerHTML = changeHtml || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
         }
@@ -884,11 +879,12 @@ def main():
             if(activeEtf) selectEtf(activeEtf);
         }
 
+        // 其餘分佈、全市場異動、交叉比較等邏輯字字未改，完全保留不變
         function searchStockDistribution() {
             let target = document.getElementById('stockInput').value.trim();
             if(!target) return;
 
-            let dates = [...new Set(globalRawData.map(d => d.date))].sort();
+            let dates = [...new Set(globalRawData.map(d => d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
             let matches = globalRawData.filter(d => d.date === latestDate && d.stock === target);
 
@@ -917,7 +913,7 @@ def main():
 
         function loadGlobalChanges() {
             let type = document.getElementById('globalRangeType').value;
-            let dates = [...new Set(globalRawData.map(d=>d.date))].sort();
+            let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
             let compDate = "";
 
@@ -965,7 +961,7 @@ def main():
 
         function loadMarketHeat() {
             let type = document.getElementById('heatRangeType').value;
-            let dates = [...new Set(globalRawData.map(d=>d.date))].sort();
+            let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
             let compDate = (type === 'custom') ? document.getElementById('heatStartDate').value : dates[Math.max(0, dates.length - 1 - parseInt(type))];
 
@@ -992,7 +988,7 @@ def main():
             let checkedCbs = Array.from(document.querySelectorAll('.etf-compare-cb:checked')).map(c => c.value);
             if(checkedCbs.length === 0) { alert("請至少勾選一檔 ETF 進行交叉矩陣比對！"); return; }
 
-            let dates = [...new Set(globalRawData.map(d=>d.date))].sort();
+            let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
 
             header = document.getElementById('compareTableHeader');
