@@ -6,57 +6,71 @@ import json
 import os
 
 # ==========================================
-# 1. 網頁基本設定 (全寬佈局、注入前端優雅白/藍視覺樣式)
+# 1. 網頁基本設定 (全寬佈局、注入 Bootstrap 5 完美版型樣式)
 # ==========================================
 st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide")
 
 SHEET_NAME = "ETF daily"
-WORKSHEET_HISTORY = "ETF History"  # 確保與試算表名稱精確一致
+WORKSHEET_HISTORY = "ETF History"
 
-# 注入自訂 CSS，完美還原前端 HTML/Bootstrap 視覺特徵
+# 全面注入你提供的精美 CSS 樣式，完美還原前端視覺
 st.markdown("""
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     <style>
-        /* 全域字體與背景色調整 */
+        /* 全域樣式覆蓋 */
         html, body, [data-testid="stAppViewContainer"] {
             font-family: 'Noto Sans TC', sans-serif !important;
             background-color: #f4f6f9 !important;
             color: #333333;
         }
         
-        /* 頂部導覽列風格模擬 */
+        /* 頂部導覽列風格完美還原 */
         .custom-navbar {
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            padding: 15px 25px;
-            color: white;
-            font-size: 1.3rem;
-            font-weight: 700;
-            border-radius: 8px;
-            margin-bottom: 25px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            padding: 12px 25px;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+        }
+        .custom-navbar-brand {
+            color: #ffffff !important;
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-decoration: none;
             display: flex;
             align-items: center;
         }
         
-        /* 自訂卡片樣式 */
+        /* 自訂 Card 區塊樣式 */
         .custom-card {
+            border: none !important;
+            border-radius: 12px !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05) !important;
+            margin-bottom: 1.5rem !important;
+            background-color: #ffffff !important;
+            padding: 1.25rem;
+        }
+        .custom-card-header {
             background-color: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            padding: 20px;
-            margin-bottom: 25px;
-            border: none;
+            border-bottom: 1px solid #edf2f9;
+            font-weight: 700;
+            font-size: 1.1rem;
+            padding-bottom: 0.75rem;
+            margin-bottom: 1rem;
+            color: #1e3c72;
         }
         
-        /* 營運指標卡片 (Meta Card) */
+        /* 營運指標快照卡片 (Meta Card) */
         .custom-meta-card {
             background: #ffffff;
             border-left: 4px solid #2a5298;
-            padding: 15px;
+            padding: 12px;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.04);
             text-align: center;
-            margin-bottom: 15px;
+            margin-bottom: 1rem;
         }
         .meta-label {
             font-size: 0.85rem;
@@ -65,22 +79,59 @@ st.markdown("""
             font-weight: 500;
         }
         .meta-value {
-            font-size: 1.25rem;
+            font-size: 1.15rem;
             font-weight: 700;
             color: #1a202c;
         }
         
-        /* 隱藏 Streamlit 原生內建的不必要元件以維持乾淨 */
+        /* 模擬 Nav Tabs 的選取狀態樣式 */
+        button[data-baseweb="tab"] {
+            border: none !important;
+            color: #4a5568 !important;
+            font-weight: 500 !important;
+            padding: 0.5rem 1rem !important;
+            border-radius: 8px !important;
+            background-color: transparent !important;
+            transition: all 0.2s;
+        }
+        button[data-baseweb="tab"]:hover {
+            background-color: #f1f5f9 !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            background-color: #e2e8f0 !important;
+            color: #1e3c72 !important;
+            font-weight: 700 !important;
+        }
+        
+        /* 排行榜數字圓圈 */
+        .rank-badge {
+            width: 24px;
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-weight: bold;
+            font-size: 0.85rem;
+            color: white;
+        }
+        
+        /* 隱藏不必要的 Streamlit 預設腳標 */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
-# 顯示自訂頂欄
-st.markdown('<div class="custom-navbar">💻 ETF 籌碼大數據監控面板</div>', unsafe_allow_html=True)
+# 渲染精美頂部導覽列
+st.markdown("""
+    <nav class="custom-navbar">
+        <a class="custom-navbar-brand" href="#">
+            <i class="bi bi-cpu-fill me-2"></i> ETF 籌碼大數據監控面板
+        </a>
+    </nav>
+""", unsafe_allow_html=True)
 
 def get_sheets_client():
-    # 優先從 Streamlit Secrets 中讀取憑證
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
     if not creds_json and "GOOGLE_CREDENTIALS" in st.secrets:
         creds_json = st.secrets["GOOGLE_CREDENTIALS"]
@@ -93,14 +144,12 @@ def get_sheets_client():
         except Exception as e:
             st.error(f"❌ Secrets 中的 GOOGLE_CREDENTIALS JSON 解析失敗: {e}")
 
-    # 本地開發備用
     json_path = os.path.join(os.getcwd(), 'credentials.json')
     if os.path.exists(json_path):
         with open(json_path, 'r', encoding='utf-8') as f:
             return gspread.service_account_from_dict(json.load(f))
     return None
 
-# 初始化 Google Sheets
 @st.cache_resource
 def init_gspread():
     try:
@@ -123,13 +172,10 @@ def load_historical_data():
         return pd.DataFrame()
     try:
         ws = sh.worksheet(WORKSHEET_HISTORY)
-        
-        # 💡 關鍵修復：改用 get_all_values() 讀取純字串矩陣，徹底封印 gspread 自動轉型帶來的 Bug
         raw_data = ws.get_all_values()
         if not raw_data or len(raw_data) < 2:
             return pd.DataFrame()
             
-        # 將第一列視為 Header，其餘列視為 Row Data
         df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         return standardize_df(df)
     except Exception as e:
@@ -165,16 +211,13 @@ def standardize_df(df):
             
     df = df.rename(columns=rename_dict)
     
-    # 完美的 Pandas 向量化清洗與空值強制容錯
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
     
-    # 清洗權重欄位 (安全排除百分號與千分號，將空字串與空格轉為 0.0)
     df['weight'] = df['weight'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False).str.strip()
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(0.0)
     if df['weight'].max() <= 1.0: 
         df['weight'] = df['weight'] * 100
         
-    # 清洗持有數量欄位 (安全排除千分號，將空字串與空格轉為 0.0)
     df['volume'] = df['volume'].astype(str).str.replace(',', '', regex=False).str.strip()
     df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0.0)
     
@@ -182,9 +225,7 @@ def standardize_df(df):
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 過濾因轉型失敗產生無效日期的不完整資料行
     df = df.dropna(subset=['date'])
-    
     return df
 
 def is_global_stock_code(df):
@@ -199,7 +240,7 @@ def is_global_stock_code(df):
     return ~(mask_code_meta | mask_name_meta | mask_exclude)
 
 # ==========================================
-# 3. 核心業務邏輯與熱度計算
+# 3. 核心業務邏輯與熱度計算 (🎯 已修正 Duplicate Labels Bug)
 # ==========================================
 def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
     status_dict = {}
@@ -207,8 +248,9 @@ def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
         return {k: "-" for k in df_target[key_col].unique()}
         
     for code, group in df_target.groupby(key_col):
-        group = group.set_index('date').reindex(sorted_dates, fill_value=0)
-        diff_values = group['volume'].diff().values[::-1]
+        # 💡 核心 Bug 修復點：先利用 groupby('date') 進行體積加總，徹底杜絕重複標籤引起的 reindex 崩潰
+        series = group.groupby('date')['volume'].sum().reindex(sorted_dates, fill_value=0)
+        diff_values = series.diff().values[::-1]
         
         trend_count = 0
         current_trend = ""
@@ -312,7 +354,6 @@ def get_all_global_changes(df, range_type, start_date=None, end_date=None):
             fill_val = df_merged['etf_stock'].str.split('_').str[1]
         else:
             fill_val = ''
-            
         df_merged[col] = df_merged[col].replace(0, np.nan).fillna(fill_val)
 
     df_merged['diff'] = df_merged['volume_new'] - df_merged['volume_old']
@@ -340,7 +381,6 @@ def get_all_global_changes(df, range_type, start_date=None, end_date=None):
     return {"latestDate": latest_date, "compareDate": compare_date, "changes": df_change}
 
 def get_market_heat_ranking(df):
-    """ 功能 D：大數據智慧計算全市場熱度排行 """
     sorted_dates = sorted(df['date'].unique())
     if len(sorted_dates) < 2: return None
     
@@ -371,13 +411,13 @@ def get_multi_etf_comparison(df, etf_codes):
     df_sub = df[(df['date'] == latest_date) & (df['etf'].isin(etf_codes)) & is_global_stock_code(df)]
     if df_sub.empty: return None
     
-    pivot_weight = df_sub.pivot(index=['stock', 'name'], columns='etf', values='weight').fillna(0)
+    pivot_weight = df_sub.pivot_index = df_sub.pivot_table(index=['stock', 'name'], columns='etf', values='weight', aggfunc='sum').fillna(0)
     pivot_weight.columns = [f"{c} 權重(%)" for c in pivot_weight.columns]
     
     return pivot_weight.reset_index()
 
 # ==========================================
-# 4. 介面佈局與標籤頁渲染 (完全依據 HTML 結構)
+# 4. 介面佈局與標籤頁渲染
 # ==========================================
 def main():
     df = load_historical_data()
@@ -387,9 +427,8 @@ def main():
 
     etf_list = sorted(df['etf'].dropna().unique().tolist())
     
-    # 全域時間視窗控制
     st.sidebar.header("⚙️ 條件篩選控制台")
-    range_type = st.sidebar.selectbox("歷史對比時間窗口", ["1", "5", "10", "custom"], index=0, help="適用於單檔明細與全市場異動")
+    range_type = st.sidebar.selectbox("歷史對比時間窗口", ["1", "5", "10", "custom"], index=0)
     
     start_date, end_date = None, None
     if range_type == "custom":
@@ -397,7 +436,7 @@ def main():
         start_date = st.sidebar.selectbox("起始對比日", available_dates, index=0)
         end_date = st.sidebar.selectbox("結束基準日", available_dates, index=len(available_dates)-1)
 
-    # 完美對齊前端 HTML 的 5 大標籤頁群組
+    # 綁定 Bootstrap 5 頁籤名稱與圖標特徵
     tabs = st.tabs([
         "📊 單檔 ETF 籌碼與持股", 
         "🔗 個股籌碼分佈", 
@@ -410,6 +449,7 @@ def main():
     # Tab A: 單檔 ETF 籌碼與持股
     # ------------------------------------------
     with tabs[0]:
+        st.markdown('<div class="custom-card"><div class="custom-card-header"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股監測</div>', unsafe_allow_html=True)
         selected_etf = st.selectbox("請選擇監控的 ETF 代號", etf_list, key="tab_a_etf")
         res = get_etf_detail_data(df, selected_etf, range_type, start_date, end_date)
         
@@ -434,60 +474,64 @@ def main():
                     st.info("該時間區間內持股數量無異動。")
             with sub_t3:
                 st.dataframe(res['assets'][['stock', 'name', 'weight', 'volume']].rename(columns={'stock':'資產代碼','name':'項目名稱','weight':'權重(%)','volume':'金額/數量'}), use_container_width=True, hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------------------------------
     # Tab B: 個股籌碼分佈
     # ------------------------------------------
     with tabs[1]:
+        st.markdown('<div class="custom-card"><div class="custom-card-header"><i class="bi bi-share-fill me-2"></i>核心個股穿透分析</div>', unsafe_allow_html=True)
         all_stocks = sorted(df[is_global_stock_code(df)]['stock'].unique())
         target_stock = st.selectbox("請輸入或選擇標的個股代號", all_stocks, key="tab_b_stock")
         dist = get_stock_distribution(df, target_stock)
         
         if dist:
-            st.markdown(f'<div class="custom-card"><h3>🎯 {dist["stockCode"]} - {dist["stockName"]}</h3>', unsafe_allow_html=True)
+            st.markdown(f"<h4>🎯 {dist['stockCode']} - {dist['stockName']}</h4>", unsafe_allow_html=True)
             cc1, cc2 = st.columns(2)
             cc1.metric("全市場 ETF 總持股量", f"{int(dist['totalVolume']):,} 股")
             cc2.metric("納入此標的之 ETF 總檔數", f"{dist['totalEtfCount']} 檔")
             
             st.markdown("##### 📊 各大 ETF 持股佔比明細")
             st.dataframe(dist['data'].rename(columns={'etf':'持有此股之 ETF','weight':'持股權重(%)','volume':'持有股數'}), use_container_width=True, hide_index=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------------------------------
     # Tab C: 全市場異動總覽
     # ------------------------------------------
     with tabs[2]:
-        st.markdown("### 🌍 全市場 ETF 成分股異動快照大數據")
+        st.markdown('<div class="custom-card"><div class="custom-card-header"><i class="bi bi-globe me-2"></i>全市場 ETF 成分股異動快照大數據</div>', unsafe_allow_html=True)
         res_c = get_all_global_changes(df, range_type, start_date, end_date)
         if res_c:
             st.caption(f"數據對比區間：{res_c['compareDate']} ➔ {res_c['latestDate']}")
             st.dataframe(res_c['changes'][['etf', 'stock', 'name', 'nature', 'diff', 'continuousStatus']].rename(columns={'etf':'ETF代號','stock':'股票代號','name':'股票名稱','nature':'異動狀態','diff':'股數變動','continuousStatus':'連續買賣紀錄'}), use_container_width=True, hide_index=True)
         else:
             st.info("全市場在此時間視窗內無任何成分股增減持異動。")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------------------------------
     # Tab D: 市場熱度排行
     # ------------------------------------------
     with tabs[3]:
-        st.markdown("### 🔥 市場熱度排行 (昨日換手巨量追蹤)")
+        st.markdown('<div class="custom-card"><div class="custom-card-header"><i class="bi bi-fire me-2 text-danger"></i>全市場熱度追蹤排行</div>', unsafe_allow_html=True)
         heat = get_market_heat_ranking(df)
         if heat:
             st.caption(f"最新計算基準日：{heat['date']}")
             hc1, hc2 = st.columns(2)
             
             with hc1:
-                st.markdown('<div style="border-top: 4px solid #de2a2a; padding-top:10px;"><h5>🔺 全市場投信法人的加碼熱度榜 (Top 10)</h5></div>', unsafe_allow_html=True)
+                st.markdown('<div style="border-top: 4px solid #de2a2a; padding-top:10px;"><h5>🔺 <span class="badge bg-danger">Top 10</span> 全市場投信法人加碼熱度榜</h5></div>', unsafe_allow_html=True)
                 st.dataframe(heat['bought'].rename(columns={'stock':'股票代號','name':'股票名稱','net_change':'全市場淨加碼股數','volume_new':'當前總持股數'}).drop(columns=['volume_old']), use_container_width=True, hide_index=True)
                 
             with hc2:
-                st.markdown('<div style="border-top: 4px solid #2ade34; padding-top:10px;"><h5>🔻 全市場投信法人的減碼熱度榜 (Top 10)</h5></div>', unsafe_allow_html=True)
+                st.markdown('<div style="border-top: 4px solid #2ade34; padding-top:10px;"><h5>🔻 <span class="badge bg-success">Top 10</span> 全市場投信法人減碼熱度榜</h5></div>', unsafe_allow_html=True)
                 st.dataframe(heat['sold'].rename(columns={'stock':'股票代號','name':'股票名稱','net_change':'全市場淨減碼股數','volume_new':'當前總持股數'}).drop(columns=['volume_old']), use_container_width=True, hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------------------------------
     # Tab E: ETF 交叉比較
     # ------------------------------------------
     with tabs[4]:
-        st.markdown("### ⚔️ 多檔 ETF 成分股持股權重同步交叉矩陣")
+        st.markdown('<div class="custom-card"><div class="custom-card-header"><i class="bi bi-arrow-left-right me-2"></i>多檔 ETF 成分股持股權重同步交叉矩陣</div>', unsafe_allow_html=True)
         selected_etfs = st.multiselect("請挑選多檔欲進行權重對比的 ETF", etf_list, default=etf_list[:2] if len(etf_list) >= 2 else etf_list)
         
         if selected_etfs:
@@ -498,6 +542,7 @@ def main():
                 st.warning("選擇的 ETF 組合查無對應交叉持股數據。")
         else:
             st.info("請先挑選至少一檔以上的 ETF 進行矩陣比對。")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
