@@ -31,6 +31,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
+WORKSHEET_TICKER = "代號"  # 👈 新增「代號」工作表名稱定義
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -77,7 +78,44 @@ def fetch_raw_sheet_data():
     except Exception as e:
         return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
 
-def process_and_standardize(raw_data):
+# 👈 新增：讀取「代號」工作表並建立對照字典
+@st.cache_data(ttl=300)
+def fetch_ticker_mapping():
+    if not sh:
+        return {}, "無法連線至 Google 試算表"
+    try:
+        ws = sh.worksheet(WORKSHEET_TICKER)
+        raw_ticker = ws.get_all_values()
+        if not raw_ticker or len(raw_ticker) < 2:
+            return {}, None
+        
+        # 假設第一列是欄位名稱，找到「股票代號」與「公司名稱」或「名稱」的 index
+        headers = [str(h).strip() for h in raw_ticker[0]]
+        
+        # 彈性判定欄位名稱
+        code_idx, name_idx = -1, -1
+        for i, h in enumerate(headers):
+            if h in ["股票代號", "代號", "Stock Code", "Code"]:
+                code_idx = i
+            if h in ["公司名稱", "股票名稱", "名稱", "Name", "Company Name"]:
+                name_idx = i
+                
+        # 如果沒找到明確欄位，預設第 0 欄為代號，第 1 欄為名稱
+        if code_idx == -1: code_idx = 0
+        if name_idx == -1: name_idx = 1
+        
+        ticker_map = {}
+        for row in raw_ticker[1:]:
+            if len(row) > max(code_idx, name_idx):
+                code = str(row[code_idx]).strip()
+                name = str(row[name_idx]).strip()
+                if code:
+                    ticker_map[code] = name
+        return ticker_map, None
+    except Exception as e:
+        return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
+
+def process_and_standardize(raw_data, ticker_map=None):
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
     df.columns = [str(c).strip() for c in df.columns]
     
@@ -115,6 +153,11 @@ def process_and_standardize(raw_data):
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
+    # 👈 新增：如果對照字典存在，針對股票代號相同者替換公司名稱
+    if ticker_map:
+        # 使用 .map() 進行對照，若對照表有資料就更新，沒資料（例如非股票資產）就保留原本的 name
+        df['name'] = df['stock'].map(ticker_map).fillna(df['name'])
+    
     return df, None
 
 # ==========================================
@@ -124,7 +167,12 @@ def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
         return "[]"
-    df, clean_err = process_and_standardize(raw_data)
+        
+    # 👈 新增：載入代號對照表
+    ticker_map, _ = fetch_ticker_mapping()
+    
+    # 👈 修改：將 ticker_map 帶入資料標準化函數中
+    df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty:
         return "[]"
     
@@ -792,7 +840,7 @@ def main():
             document.getElementById('stockResultTitle').innerText = `🔍 個股 [${target}] 於全市場 ETF 最新持股分佈明細 (${latestDate})`;
 
             if(matches.length === 0) {
-                body.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">全市場目前無任何 ETF 持有此資產。</td></tr>`;
+                body.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">全市場目前無 any ETF 持有此資產。</td></tr>`;
                 return;
             }
 
@@ -889,7 +937,7 @@ def main():
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort();
             let latestDate = dates[dates.length - 1];
 
-            let header = document.getElementById('compareTableHeader');
+            header = document.getElementById('compareTableHeader');
             header.innerHTML = `<th>股票代號</th><th>股票名稱</th>` + checkedCbs.map(c => `<th class="text-end" style="min-width:120px;">${c} 權重</th>`).join('');
 
             let stockMap = {};
