@@ -13,7 +13,7 @@ st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide")
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
 
-# 注入完美對齊原圖的白底、輕量邊框、彩色頂條 CSS
+# 注入對齊原圖的純白極簡風格、輕量邊框、彩色頂條 CSS
 st.markdown("""
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -88,7 +88,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 雲端試算表資料串接與清洗
+# 2. 雲端試算表資料串接與精準清洗 (修正欄位對照)
 # ==========================================
 def get_sheets_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
@@ -134,14 +134,17 @@ def load_historical_data():
 
 def standardize_df(df):
     if df.empty: return df
+    
+    # 🎯 這裡精準匹配你提供的工作表欄位名稱
     alias_map = {
         "etf": ["ETF代號", "ETF", "ETF碼"],
         "date": ["日期", "時間", "Date"],
-        "stock": ["股票代號", "成分股代號", "代號", "商品代號"],
-        "name": ["股票名稱", "成分股名稱", "名稱", "商品名稱"],
-        "weight": ["權重", "權重(%)", "持股比例"],
-        "volume": ["持有數", "張數", "持有張數", "股數", "持有股數"]
+        "stock": ["成分股代號", "股票代號", "代號", "商品代號"],
+        "name": ["成分股名稱", "股票名稱", "名稱", "商品名稱"],
+        "weight": ["持股權重", "權重", "權重(%)", "持股比例"],
+        "volume": ["持有數量", "持有數", "張數", "持有張數", "股數", "持有股數"]
     }
+    
     df.columns = [str(c).strip() for c in df.columns]
     rename_dict = {}
     for standard, aliases in alias_map.items():
@@ -149,14 +152,25 @@ def standardize_df(df):
             if alias in df.columns:
                 rename_dict[alias] = standard
                 break
+                
     df = df.rename(columns=rename_dict)
+    
+    # 確保關鍵欄位成功對齊，避免後續運算噴 KeyError
+    missing_cols = [k for k, v in alias_map.items() if k not in df.columns and k in ["etf", "date", "stock", "weight"]]
+    if missing_cols:
+        st.error(f"❌ 欄位轉換失敗，工作表內找不到對應屬性。請確認欄位是否包含：{missing_cols}")
+        return pd.DataFrame()
+
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df['weight'] = pd.to_numeric(df['weight'].astype(str).str.replace('%','').str.replace(',',''), errors='coerce').fillna(0.0)
-    if df['weight'].max() <= 1.0: df['weight'] = df['weight'] * 100
-    df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',',''), errors='coerce').fillna(0.0)
+    df['weight'] = pd.to_numeric(df['weight'].astype(str).str.replace('%','', regex=False).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
+    if df['weight'].max() <= 1.0: 
+        df['weight'] = df['weight'] * 100
+        
+    df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
     df['stock'] = df['stock'].astype(str).str.strip()
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
+    
     return df.dropna(subset=['date'])
 
 def is_global_stock_code(df):
@@ -176,7 +190,7 @@ def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
         
     for code, group in df_target.groupby(key_col):
         series = group.groupby('date')['volume'].sum().reindex(sorted_dates, fill_value=0)
-        diff_values = series.diff().values[::-1] # 從最新日期倒回去算
+        diff_values = series.diff().values[::-1] 
         
         trend_count = 0
         current_trend = ""
@@ -195,7 +209,7 @@ def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
     return status_dict
 
 # ==========================================
-# 4. 主渲染畫面 (完美對應白底與控制邏輯)
+# 4. 主監控面板渲染
 # ==========================================
 def main():
     df = load_historical_data()
@@ -205,19 +219,17 @@ def main():
 
     etf_list = sorted(df['etf'].dropna().unique().tolist())
 
-    # 建立左右不對稱主結構 (左側選擇面板 1.1 : 右側主視覺監控 3.5)
+    # 建立左右不對稱主佈局結構 (左選單 1.1 : 右看板 3.5)
     main_left, main_right = st.columns([1.1, 3.5])
 
     # ------------------------------------------
-    # 左側面板：請選擇 ETF 代號 (精準還原截圖樣式)
+    # 左側面板：請選擇 ETF 代號
     # ------------------------------------------
     with main_left:
         st.markdown('<div class="panel-title"><b>::: 請選擇 ETF 代號</b></div>', unsafe_allow_html=True)
         search_query = st.text_input("輸入關鍵字篩選...", placeholder="輸入關鍵字篩選...", label_visibility="collapsed", key="left_filter")
         
         filtered_etfs = [e for e in etf_list if search_query.lower() in e.lower()] if search_query else etf_list
-        
-        # 模擬左側縱向點選清單 (使用單選鈕美化或選單)
         selected_etf = st.radio("ETF清單列表", filtered_etfs, label_visibility="collapsed", key="left_etf_radio")
 
     # ------------------------------------------
@@ -232,19 +244,17 @@ def main():
         sorted_dates = sorted(df_etf['date'].unique())
         latest_date = sorted_dates[-1]
 
-        # 籌碼比較天數/範圍控制盒 (在此處接接收使用者的設定值)
+        # 籌碼比較天數/範圍控制盒
         st.markdown('<div class="white-panel-card">', unsafe_allow_html=True)
         st.markdown('<div class="panel-title"><b>🗃️ 籌碼比較天數 / 範圍</b></div>', unsafe_allow_html=True)
         
         ctrl_c1, ctrl_c2 = st.columns([3, 1])
         with ctrl_c1:
-            # 建立真正能選擇並動態轉換邏輯的下拉選單
             comp_option = st.selectbox(
                 "比較日選擇",
                 ["與前 1 筆紀錄比較 (日變動)", "與前 5 筆紀錄比較", "與前 10 筆紀錄比較"],
                 label_visibility="collapsed"
             )
-            # 根據下拉選單解析 offset 天數
             if "1" in comp_option: offset = 1
             elif "5" in comp_option: offset = 5
             else: offset = 10
@@ -253,12 +263,11 @@ def main():
             compare_date = sorted_dates[compare_index]
             
         with ctrl_c2:
-            recalc_triggered = st.button("🧮 重新計算籌碼", use_container_width=True)
+            st.button("🧮 重新計算籌碼", use_container_width=True)
             
         st.markdown(f'<p style="font-size:0.85rem; color:#4a5568; margin: 4px 0 0 0;">📊 <b>籌碼分析區間：</b> 比較日 <span class="badge bg-light text-dark" style="border:1px solid #cbd5e1;">{compare_date}</span> ➔ 基準日 <span class="badge bg-light text-dark" style="border:1px solid #cbd5e1;">{latest_date}</span></p>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # 提取最新一日的對應資料
         df_latest = df_etf[df_etf['date'] == latest_date]
         
         def fetch_meta_val(key_name):
@@ -271,19 +280,13 @@ def main():
 
         # 頂部 6 聯排獨立彩色頂邊框 Meta 卡片
         mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-        
-        # 昨收價 (灰色)
         mc1.markdown(f'<div class="meta-box" style="border-top: 3px solid #718096;"><div class="meta-title">昨收價</div><div class="meta-num">{fetch_meta_val("昨收價")}</div></div>', unsafe_allow_html=True)
-        # 漲跌 (紅色)
         mc2.markdown(f'<div class="meta-box" style="border-top: 3px solid #e53e3e;"><div class="meta-title">漲跌</div><div class="meta-num">{fetch_meta_val("漲跌")}</div></div>', unsafe_allow_html=True)
-        # 市價 (藍色)
         mc3.markdown(f'<div class="meta-box" style="border-top: 3px solid #3182ce;"><div class="meta-title">市價</div><div class="meta-num">{fetch_meta_val("市價")}</div></div>', unsafe_allow_html=True)
-        # 股數 (橘色)
+        
         stock_vol_str = fetch_meta_val("股數") if "股數" in df_latest['stock'].values else f"{int(stocks_df['volume'].sum()):,}" if not stocks_df.empty else "-"
         mc4.markdown(f'<div class="meta-box" style="border-top: 3px solid #dd6b20;"><div class="meta-title">股數</div><div class="meta-num">{stock_vol_str}</div></div>', unsafe_allow_html=True)
-        # 規模 (紫色)
         mc5.markdown(f'<div class="meta-box" style="border-top: 3px solid #805ad5;"><div class="meta-title">規模</div><div class="meta-num">{fetch_meta_val("規模")}</div></div>', unsafe_allow_html=True)
-        # 折溢價 (青綠色)
         mc6.markdown(f'<div class="meta-box" style="border-top: 3px solid #319795;"><div class="meta-title">折溢價</div><div class="meta-num">{fetch_meta_val("折溢價")}</div></div>', unsafe_allow_html=True)
 
         # 中層雙表格：最新成分股持股明細 vs 非股票資產項目
@@ -297,7 +300,7 @@ def main():
                 hide_index=True,
                 height=320,
                 column_config={
-                    "stock": st.column_config.TextColumn("股票代號", help="成分股代號"),
+                    "stock": st.column_config.TextColumn("股票代號"),
                     "name": "股票名稱",
                     "weight": st.column_config.NumberColumn("持股權重", format="%.2f%%"),
                     "volume": st.column_config.NumberColumn("最新持股(股)", format="%d 股")
@@ -327,7 +330,6 @@ def main():
             </div>
         """, unsafe_allow_html=True)
 
-        # 計算對比日之間的籌碼異動量
         df_comp = df_etf[df_etf['date'] == compare_date]
         df_merged = pd.merge(
             stocks_df[['stock', 'name', 'volume']], 
@@ -337,36 +339,4 @@ def main():
             suffixes=('_new', '_old')
         ).fillna(0)
         
-        df_merged['diff'] = df_merged['volume_new'] - df_merged['volume_old']
-        df_change = df_merged[df_merged['diff'] != 0].copy()
-
-        if not df_change.empty:
-            def judge_nature(r):
-                if r['volume_old'] == 0 and r['volume_new'] > 0: return "新增"
-                if r['volume_old'] > 0 and r['diff'] > 0: return "增加"
-                if r['volume_new'] > 0 and r['diff'] < 0: return "減少"
-                return "刪除"
-            df_change['nature'] = df_change.apply(judge_nature, axis=1)
-            
-            # 計算歷史連續狀態
-            status_map = calculate_continuous_status(df_etf[is_global_stock_code(df_etf)], sorted_dates, 'stock')
-            df_change['continuousStatus'] = df_change['stock'].map(status_map)
-            
-            # 美化展示變動數據表格
-            st.dataframe(
-                df_change[['stock', 'name', 'nature', 'diff', 'continuousStatus']],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "stock": "成分股",
-                    "name": "股票名稱",
-                    "nature": "異動性質",
-                    "diff": st.column_config.NumberColumn("區間增減股數", format="%d 股"),
-                    "continuousStatus": "核心歷史連續買賣狀態"
-                }
-            )
-        else:
-            st.info("💡 該對比區間內，此 ETF 成分股持倉數量未發生任何增減變動。")
-
-if __name__ == "__main__":
-    main()
+        df_merged
