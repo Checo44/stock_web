@@ -31,7 +31,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "代號"  # 👈 新增「代號」工作表名稱定義
+WORKSHEET_TICKER = "代號"
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -78,7 +78,6 @@ def fetch_raw_sheet_data():
     except Exception as e:
         return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
 
-# 👈 新增：讀取「代號」工作表並建立對照字典
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
     if not sh:
@@ -89,10 +88,8 @@ def fetch_ticker_mapping():
         if not raw_ticker or len(raw_ticker) < 2:
             return {}, None
         
-        # 假設第一列是欄位名稱，找到「股票代號」與「公司名稱」或「名稱」的 index
         headers = [str(h).strip() for h in raw_ticker[0]]
         
-        # 彈性判定欄位名稱
         code_idx, name_idx = -1, -1
         for i, h in enumerate(headers):
             if h in ["股票代號", "代號", "Stock Code", "Code"]:
@@ -100,7 +97,6 @@ def fetch_ticker_mapping():
             if h in ["公司名稱", "股票名稱", "名稱", "Name", "Company Name"]:
                 name_idx = i
                 
-        # 如果沒找到明確欄位，預設第 0 欄為代號，第 1 欄為名稱
         if code_idx == -1: code_idx = 0
         if name_idx == -1: name_idx = 1
         
@@ -153,9 +149,7 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 👈 新增：如果對照字典存在，針對股票代號相同者替換公司名稱
     if ticker_map:
-        # 使用 .map() 進行對照，若對照表有資料就更新，沒資料（例如非股票資產）就保留原本的 name
         df['name'] = df['stock'].map(ticker_map).fillna(df['name'])
     
     return df, None
@@ -168,10 +162,8 @@ def fetch_backend_data_to_json():
     if err_msg:
         return "[]"
         
-    # 👈 新增：載入代號對照表
     ticker_map, _ = fetch_ticker_mapping()
     
-    # 👈 修改：將 ticker_map 帶入資料標準化函數中
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty:
         return "[]"
@@ -298,6 +290,7 @@ def main():
           font-weight: bold;
           font-size: 0.85rem;
         }
+        .badge-nature-new { background-color: #7c3aed; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-up { background-color: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-down { background-color: #0f766e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
@@ -760,7 +753,7 @@ def main():
 
         function renderChangeTable(etfData, sortedDates, latestDate) {
             let compareDate = document.getElementById('startDate').value;
-            document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼分析區間：</b> 比較日 <span class="badge bg-light text-dark border">${compareDate}</span> ➔ 基準日 <span class="badge bg-light text-dark border">${latestDate}</span>`;
+            document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼 analysis 區間：</b> 比較日 <span class="badge bg-light text-dark border">${compareDate}</span> ➔ 基準日 <span class="badge bg-light text-dark border">${latestDate}</span>`;
             document.getElementById('compareDateBadge').innerText = `對比區間: ${compareDate} ~ ${latestDate}`;
 
             let currentStocks = etfData.filter(d => d.date === latestDate && isNormalStock(d.stock, d.name));
@@ -790,30 +783,75 @@ def main():
                 });
             }
 
-            let changeHtml = "";
+            // 👈 核心變更點：建立 4 個容器以便最後依序「新增 -> 增加 -> 減少 -> 刪除」串接排序
+            let htmlNew = "";
+            let htmlAdd = "";
+            let htmlSub = "";
+            let htmlDel = "";
+
             currentStocks.forEach(r => {
                 let oldVol = compRows.find(c => c.stock === r.stock)?.volume || 0;
                 let diff = r.volume - oldVol;
 
                 if (diff !== 0) {
                     let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
-                    let badge = nature === "減少" ? `<span class="badge-nature-down">${nature}</span>` : `<span class="badge-nature-up">${nature}</span>`;
-                    let dStyle = nature === "減少" ? "color:#0f766e;" : "color:#dc2626;";
+                    
+                    // 👈 核心變更點：新增與增加在樣式上做出區分，其餘保留
+                    let badge = "";
+                    let dStyle = "";
+                    if (nature === "新增") {
+                        badge = `<span class="badge-nature-new">${nature}</span>`;
+                        dStyle = "color:#7c3aed;"; // 紫色
+                    } else if (nature === "增加") {
+                        badge = `<span class="badge-nature-up">${nature}</span>`;
+                        dStyle = "color:#dc2626;"; // 紅色
+                    } else {
+                        badge = `<span class="badge-nature-down">${nature}</span>`;
+                        dStyle = "color:#0f766e;"; // 藍綠色
+                    }
                     
                     let trendStr = trendMap[r.stock] || "-";
                     let trendHtml = `<span class="text-muted">-</span>`;
                     if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
                     if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
 
-                    changeHtml += `
+                    let rowHtml = `
                         <tr>
                             <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
                             <td>${badge}</td>
                             <td class="text-end fw-bold font-monospace" style="${dStyle}">${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString()} 股</td>
                             <td class="px-4">${trendHtml}</td>
                         </tr>`;
+
+                    // 👈 依照狀態派發至對應的分組字串
+                    if (nature === "新增") htmlNew += rowHtml;
+                    else if (nature === "增加") htmlAdd += rowHtml;
+                    else if (nature === "減少") htmlSub += rowHtml;
                 }
             });
+
+            // 👈 檢查是否有被刪除的成分股（舊日期有，新日期沒有的正常股票）
+            compRows.forEach(r => {
+                if (isNormalStock(r.stock, r.name)) {
+                    let isStillExist = currentStocks.some(c => c.stock === r.stock);
+                    if (!isStillExist && r.volume > 0) {
+                        let badge = `<span class="badge-nature-down">刪除</span>`;
+                        let dStyle = "color:#6b7280;"; // 灰暗色代表移除
+                        let diff = -r.volume;
+                        
+                        htmlDel += `
+                            <tr>
+                                <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
+                                <td>${badge}</td>
+                                <td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(diff).toLocaleString()} 股</td>
+                                <td class="px-4"><span class="text-muted">-</span></td>
+                            </tr>`;
+                    }
+                }
+            });
+
+            // 👈 依照「新增 -> 增加 -> 減少 -> 刪除」依序組合輸出
+            let changeHtml = htmlNew + htmlAdd + htmlSub + htmlDel;
             document.getElementById('changeTableBody').innerHTML = changeHtml || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
         }
 
@@ -963,10 +1001,7 @@ def main():
     </html>
     """
 
-    # 💡 關鍵安全替換：利用 .replace() 將後端真資料塞入前端預留位置，完全避開大括號衝突
     final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data)
-
-    # 渲染至網頁上
     components.html(final_html, height=1600, scrolling=True)
 
 if __name__ == "__main__":
