@@ -11,9 +11,9 @@ import os
 st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide")
 
 SHEET_NAME = "ETF daily"
-WORKSHEET_HISTORY = "ETF History"  # 已精確修正為指定名稱
+WORKSHEET_HISTORY = "ETF History"  # 確保與試算表名稱精確一致
 
-# 注入自訂 CSS，完美還原你提供的前端 HTML/Bootstrap 視覺特徵
+# 注入自訂 CSS，完美還原前端 HTML/Bootstrap 視覺特徵
 st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -282,5 +282,208 @@ def get_all_global_changes(df, range_type, start_date=None, end_date=None):
     df_lat = df_filtered[df_filtered['date'] == latest_date]
     df_comp = df_filtered[df_filtered['date'] == compare_date]
     
-    df_merged = pd.merge(df_lat[['etf_stock', 'etf', 'stock', 'name', 'volume']], df_comp[['etf_stock', 'volume']], on='etf_stock', how='outer', suffixes=('_new', '_old')).fillna(0)
-    for col in
+    df_merged = pd.merge(
+        df_lat[['etf_stock', 'etf', 'stock', 'name', 'volume']], 
+        df_comp[['etf_stock', 'volume']], 
+        on='etf_stock', 
+        how='outer', 
+        suffixes=('_new', '_old')
+    ).fillna(0)
+    
+    # 修正過後的安全對照與填補機制
+    for col in ['etf', 'stock', 'name']:
+        if col == 'etf':
+            fill_val = df_merged['etf_stock'].str.split('_').str[0]
+        elif col == 'stock':
+            fill_val = df_merged['etf_stock'].str.split('_').str[1]
+        else:
+            fill_val = ''
+            
+        df_merged[col] = df_merged[col].replace(0, np.nan).fillna(fill_val)
+
+    df_merged['diff'] = df_merged['volume_new'] - df_merged['volume_old']
+    df_change = df_merged[df_merged['diff'] != 0].copy()
+    
+    if df_change.empty: 
+        return None
+    
+    def judge_nature(r):
+        if r['volume_old'] == 0 and r['volume_new'] > 0: return "新增", 1
+        if r['volume_old'] > 0 and r['diff'] > 0: return "增加", 2
+        if r['volume_new'] > 0 and r['diff'] < 0: return "減少", 3
+        return "刪除", 4
+        
+    res = df_change.apply(judge_nature, axis=1)
+    df_change['nature'], df_change['natureOrder'] = [r[0] for r in res], [r[1] for r in res]
+    
+    df_history_filtered = df[df['date'].isin(sorted_dates) & is_global_stock_code(df)].copy()
+    df_history_filtered['etf_stock'] = df_history_filtered['etf'] + "_" + df_history_filtered['stock']
+    status_map = calculate_continuous_status(df_history_filtered, sorted_dates, 'etf_stock')
+    
+    df_change['continuousStatus'] = df_change['etf_stock'].map(status_map)
+    df_change = df_change.sort_values(by=['natureOrder', 'etf']).drop(columns=['natureOrder', 'etf_stock'])
+    
+    return {"latestDate": latest_date, "compareDate": compare_date, "changes": df_change}
+
+def get_market_heat_ranking(df):
+    """ 功能 D：大數據智慧計算全市場熱度排行 """
+    sorted_dates = sorted(df['date'].unique())
+    if len(sorted_dates) < 2: return None
+    
+    latest_date = sorted_dates[-1]
+    compare_date = sorted_dates[-2]
+    
+    df_filtered = df[df['date'].isin([latest_date, compare_date]) & is_global_stock_code(df)].copy()
+    
+    df_lat = df_filtered[df_filtered['date'] == latest_date]
+    df_comp = df_filtered[df_filtered['date'] == compare_date]
+    
+    sum_lat = df_lat.groupby(['stock', 'name'])['volume'].sum().reset_index()
+    sum_comp = df_comp.groupby(['stock', 'name'])['volume'].sum().reset_index()
+    
+    merged = pd.merge(sum_lat, sum_comp, on=['stock', 'name'], how='outer', suffixes=('_new', '_old')).fillna(0)
+    merged['net_change'] = merged['volume_new'] - merged['volume_old']
+    
+    top_bought = merged[merged['net_change'] > 0].sort_values(by='net_change', ascending=False).head(10)
+    top_sold = merged[merged['net_change'] < 0].sort_values(by='net_change', ascending=True).head(10)
+    
+    return {"date": latest_date, "bought": top_bought, "sold": top_sold}
+
+def get_multi_etf_comparison(df, etf_codes):
+    sorted_dates = sorted(df['date'].unique())
+    if not sorted_dates or not etf_codes: return None
+    latest_date = sorted_dates[-1]
+    
+    df_sub = df[(df['date'] == latest_date) & (df['etf'].isin(etf_codes)) & is_global_stock_code(df)]
+    if df_sub.empty: return None
+    
+    pivot_weight = df_sub.pivot(index=['stock', 'name'], columns='etf', values='weight').fillna(0)
+    pivot_weight.columns = [f"{c} 權重(%)" for c in pivot_weight.columns]
+    
+    return pivot_weight.reset_index()
+
+# ==========================================
+# 4. 介面佈局與標籤頁渲染 (完全依據 HTML 結構)
+# ==========================================
+def main():
+    df = load_historical_data()
+    if df.empty:
+        st.info("💡 試算表連線中或無有效數據，請確認 Google Secrets 與試算表名稱欄位。")
+        return
+
+    etf_list = sorted(df['etf'].dropna().unique().tolist())
+    
+    # 全域時間視窗控制
+    st.sidebar.header("⚙️ 條件篩選控制台")
+    range_type = st.sidebar.selectbox("歷史對比時間窗口", ["1", "5", "10", "custom"], index=0, help="適用於單檔明細與全市場異動")
+    
+    start_date, end_date = None, None
+    if range_type == "custom":
+        available_dates = sorted(df['date'].unique())
+        start_date = st.sidebar.selectbox("起始對比日", available_dates, index=0)
+        end_date = st.sidebar.selectbox("結束基準日", available_dates, index=len(available_dates)-1)
+
+    # 完美對齊前端 HTML 的 5 大標籤頁群組
+    tabs = st.tabs([
+        "📊 單檔 ETF 籌碼與持股", 
+        "🔗 個股籌碼分佈", 
+        "🌍 全市場異動總覽", 
+        "🔥 市場熱度排行", 
+        "⚔️ ETF 交叉比較"
+    ])
+    
+    # ------------------------------------------
+    # Tab A: 單檔 ETF 籌碼與持股
+    # ------------------------------------------
+    with tabs[0]:
+        selected_etf = st.selectbox("請選擇監控的 ETF 代號", etf_list, key="tab_a_etf")
+        res = get_etf_detail_data(df, selected_etf, range_type, start_date, end_date)
+        
+        if res:
+            st.markdown(f"##### 📋 {selected_etf} 營運快照指標 ({res['latestDate']})")
+            
+            m = res['meta']
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.markdown(f'<div class="custom-meta-card"><div class="meta-label">市價</div><div class="meta-value">{m["marketPrice"]}</div></div>', unsafe_allow_html=True)
+            c2.markdown(f'<div class="custom-meta-card"><div class="meta-label">昨收價</div><div class="meta-value">{m["lastClose"]}</div></div>', unsafe_allow_html=True)
+            c3.markdown(f'<div class="custom-meta-card"><div class="meta-label">漲跌</div><div class="meta-value">{m["change"]}</div></div>', unsafe_allow_html=True)
+            c4.markdown(f'<div class="custom-meta-card"><div class="meta-label">基金規模</div><div class="meta-value">{m["size"]}</div></div>', unsafe_allow_html=True)
+            c5.markdown(f'<div class="custom-meta-card"><div class="meta-label">折溢價比</div><div class="meta-value">{m["premium"]}</div></div>', unsafe_allow_html=True)
+            
+            sub_t1, sub_t2, sub_t3 = st.tabs(["📋 當前股票持股明細", "🔄 期間籌碼異動追蹤", "💰 現金與其他資產項目"])
+            with sub_t1:
+                st.dataframe(res['stocks'][['stock', 'name', 'weight', 'volume']].rename(columns={'stock':'股票代號','name':'股票名稱','weight':'持股權重(%)','volume':'持有股數'}), use_container_width=True, hide_index=True)
+            with sub_t2:
+                if not res['changes'].empty:
+                    st.dataframe(res['changes'].rename(columns={'stock':'股票代號','name':'股票名稱','nature':'異動性質','diff':'股數增減','continuousStatus':'連續買賣趨勢'}), use_container_width=True, hide_index=True)
+                else:
+                    st.info("該時間區間內持股數量無異動。")
+            with sub_t3:
+                st.dataframe(res['assets'][['stock', 'name', 'weight', 'volume']].rename(columns={'stock':'資產代碼','name':'項目名稱','weight':'權重(%)','volume':'金額/數量'}), use_container_width=True, hide_index=True)
+
+    # ------------------------------------------
+    # Tab B: 個股籌碼分佈
+    # ------------------------------------------
+    with tabs[1]:
+        all_stocks = sorted(df[is_global_stock_code(df)]['stock'].unique())
+        target_stock = st.selectbox("請輸入或選擇標的個股代號", all_stocks, key="tab_b_stock")
+        dist = get_stock_distribution(df, target_stock)
+        
+        if dist:
+            st.markdown(f'<div class="custom-card"><h3>🎯 {dist["stockCode"]} - {dist["stockName"]}</h3>', unsafe_allow_html=True)
+            cc1, cc2 = st.columns(2)
+            cc1.metric("全市場 ETF 總持股量", f"{int(dist['totalVolume']):,} 股")
+            cc2.metric("納入此標的之 ETF 總檔數", f"{dist['totalEtfCount']} 檔")
+            
+            st.markdown("##### 📊 各大 ETF 持股佔比明細")
+            st.dataframe(dist['data'].rename(columns={'etf':'持有此股之 ETF','weight':'持股權重(%)','volume':'持有股數'}), use_container_width=True, hide_index=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # ------------------------------------------
+    # Tab C: 全市場異動總覽
+    # ------------------------------------------
+    with tabs[2]:
+        st.markdown("### 🌍 全市場 ETF 成分股異動快照大數據")
+        res_c = get_all_global_changes(df, range_type, start_date, end_date)
+        if res_c:
+            st.caption(f"數據對比區間：{res_c['compareDate']} ➔ {res_c['latestDate']}")
+            st.dataframe(res_c['changes'][['etf', 'stock', 'name', 'nature', 'diff', 'continuousStatus']].rename(columns={'etf':'ETF代號','stock':'股票代號','name':'股票名稱','nature':'異動狀態','diff':'股數變動','continuousStatus':'連續買賣紀錄'}), use_container_width=True, hide_index=True)
+        else:
+            st.info("全市場在此時間視窗內無任何成分股增減持異動。")
+
+    # ------------------------------------------
+    # Tab D: 市場熱度排行
+    # ------------------------------------------
+    with tabs[3]:
+        st.markdown("### 🔥 市場熱度排行 (昨日換手巨量追蹤)")
+        heat = get_market_heat_ranking(df)
+        if heat:
+            st.caption(f"最新計算基準日：{heat['date']}")
+            hc1, hc2 = st.columns(2)
+            
+            with hc1:
+                st.markdown('<div style="border-top: 4px solid #de2a2a; padding-top:10px;"><h5>🔺 全市場投信法人的加碼熱度榜 (Top 10)</h5></div>', unsafe_allow_html=True)
+                st.dataframe(heat['bought'].rename(columns={'stock':'股票代號','name':'股票名稱','net_change':'全市場淨加碼股數','volume_new':'當前總持股數'}).drop(columns=['volume_old']), use_container_width=True, hide_index=True)
+                
+            with hc2:
+                st.markdown('<div style="border-top: 4px solid #2ade34; padding-top:10px;"><h5>🔻 全市場投信法人的減碼熱度榜 (Top 10)</h5></div>', unsafe_allow_html=True)
+                st.dataframe(heat['sold'].rename(columns={'stock':'股票代號','name':'股票名稱','net_change':'全市場淨減碼股數','volume_new':'當前總持股數'}).drop(columns=['volume_old']), use_container_width=True, hide_index=True)
+
+    # ------------------------------------------
+    # Tab E: ETF 交叉比較
+    # ------------------------------------------
+    with tabs[4]:
+        st.markdown("### ⚔️ 多檔 ETF 成分股持股權重同步交叉矩陣")
+        selected_etfs = st.multiselect("請挑選多檔欲進行權重對比的 ETF", etf_list, default=etf_list[:2] if len(etf_list) >= 2 else etf_list)
+        
+        if selected_etfs:
+            comp_df = get_multi_etf_comparison(df, selected_etfs)
+            if comp_df is not None:
+                st.dataframe(comp_df, use_container_width=True, hide_index=True)
+            else:
+                st.warning("選擇的 ETF 組合查無對應交叉持股數據。")
+        else:
+            st.info("請先挑選至少一檔以上的 ETF 進行矩陣比對。")
+
+if __name__ == "__main__":
+    main()
