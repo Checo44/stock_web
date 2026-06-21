@@ -162,8 +162,8 @@ def main():
         python_data = fetch_backend_data_from_python()
         
         if python_data:
-            # 🎯 精準對接點：將 index.html 裡的空陣列變數替換成真正的 JavaScript 陣列資料
-            html_content = html_content.replace('let globalRawData = [];', f'let globalRawData = {python_data};')
+            # 🎯 修正點：加上反單引號 ` 或單引號 '，將其宣告為字串，讓前端的 JSON.parse() 能正確解析
+            html_content = html_content.replace('let globalRawData = [];', f'let globalRawData = `{python_data}`;')
         else:
             st.warning("⚠️ 後端未能成功讀取 Google 試算表資料，目前將顯示 index.html 預設資料。")
 
