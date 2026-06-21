@@ -11,7 +11,7 @@ import os
 st.set_page_config(page_title="ETF 籌碼監控儀表板", layout="wide")
 
 SHEET_NAME = "ETF daily"
-WORKSHEET_HISTORY = "etf history"  # 主要歷史紀錄資料表名稱
+WORKSHEET_HISTORY = "ETF History"  # 主要歷史紀錄資料表名稱
 
 def get_sheets_client():
     # 優先從 Streamlit Secrets 中讀取憑證
