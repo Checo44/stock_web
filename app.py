@@ -1,55 +1,141 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import gspread
 import json
 import os
 
-# ==============================================================================
-# 1. 初始化 Streamlit 頁面設定（開啟寬螢幕模式、預設收起側邊欄）
-# ==============================================================================
-st.set_page_config(
-    page_title="ETF 籌碼大數據監控面板",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-# ==============================================================================
-# 2. 強大隱藏術：注入 CSS 拔除 Streamlit 所有原生邊框與元件
-#    讓網頁能夠 100% 滿版無縫填滿整個螢幕，完全交由 index.html 渲染
-# ==============================================================================
-st.markdown("""
-    <style>
-    /* 隱藏頂部主選單與裝飾條 */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* 隱藏底部浮水印 footer */
-    footer {visibility: hidden;}
-    
-    /* 將 Streamlit 預設的主容器邊距（Padding）歸零 */
-    .block-container {
-        padding-top: 0rem !important;
-        padding-bottom: 0rem !important;
-        padding-left: 0rem !important;
-        padding-right: 0rem !important;
-    }
-    
-    /* 確保內嵌的 iframe 底部沒有奇異的空白間距 */
-    iframe {
-        display: block;
-        border: none;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# ==========================================
+# 1. 網頁基本設定與全安全客製化 CSS 注入
+# ==========================================
+st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide", initial_sidebar_state="collapsed")
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
 
-# ==============================================================================
-# 3. 獨立安全的連線與資料載入核心
-# ==============================================================================
+# 將原 index.html 的視覺設計與卡片樣式完全融入 CSS 規範中
+st.markdown("""
+    <style>
+        /* 全域清爽白底與現代化字體規範 */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans TC", sans-serif !important;
+            background-color: #f4f6f9 !important;
+            color: #2d3748 !important;
+        }
+        
+        /* 讓選單與主內容靠頂，不留無謂空白 */
+        .block-container {
+            padding-top: 1.5rem !important;
+            padding-bottom: 2rem !important;
+        }
+        
+        /* 區塊白底高質感卡片 */
+        .white-panel-card {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 1.25rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+        
+        /* 區塊大標題與小標題 */
+        .dashboard-header {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: #1a202c;
+            margin-bottom: 1.5rem;
+            border-left: 5px solid #3182ce;
+            padding-left: 10px;
+        }
+        
+        .panel-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        /* 頂部 6 聯排獨立彩色頂邊框指標卡片 */
+        .meta-container {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 12px;
+            margin-bottom: 1.25rem;
+        }
+        
+        .meta-box {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 14px 10px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+            transition: transform 0.2s;
+        }
+        .meta-box:hover {
+            transform: translateY(-2px);
+        }
+        .meta-title {
+            font-size: 0.8rem;
+            color: #718096;
+            margin-bottom: 6px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .meta-num {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #1a202c;
+            min-height: 32px;
+        }
+        
+        /* 底部深色緞帶明細表頭 */
+        .dark-ribbon-header {
+            background-color: #1a202c;
+            color: #ffffff;
+            padding: 14px 18px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        
+        /* 區間標籤美化 */
+        .date-badge {
+            background-color: #ebf8ff;
+            color: #2b6cb0;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-weight: 700;
+            border: 1px solid #bee3f8;
+            font-size: 0.85rem;
+        }
+        
+        /* 讓 Streamlit 原生的 dataframe 元件完美融入白底卡片 */
+        .stDataFrame {
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. 獨立安全的連線與資料載入核心 (快取)
+# ==========================================
 def get_sheets_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
     if not creds_json and "GOOGLE_CREDENTIALS" in st.secrets:
@@ -82,12 +168,12 @@ sh = init_gspread()
 @st.cache_data(ttl=300)
 def fetch_raw_sheet_data():
     if not sh: 
-        return None, "無法連線至 Google 試算表，請檢查憑證與網路設定。"
+        return None, "無法連線至 Google 試算表，請檢查憑證設定。"
     try:
         ws = sh.worksheet(WORKSHEET_HISTORY)
         raw_data = ws.get_all_values()
         if not raw_data or len(raw_data) < 2:
-            return None, f"工作表「{WORKSHEET_HISTORY}」內無有效資料數據。"
+            return None, f"工作表「{WORKSHEET_HISTORY}」內沒有足夠的數據列。"
         return raw_data, None
     except Exception as e:
         return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
@@ -116,7 +202,7 @@ def process_and_standardize(raw_data):
     
     missing = [k for k in ["etf", "date", "stock", "weight", "volume"] if k not in df.columns]
     if missing:
-        return pd.DataFrame(), f"主要欄位對照失敗，缺少必要屬性: {missing}"
+        return pd.DataFrame(), f"主要欄位對照失敗。缺少對應: {missing}"
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
     df = df.dropna(subset=['date'])
@@ -132,48 +218,234 @@ def process_and_standardize(raw_data):
     
     return df, None
 
-# ==============================================================================
-# 4. 【純後端資料清洗與打包】
-#    移除原本在 Python 裡的 UI 邏輯，純粹將 Google Sheets 資料轉為前端所需的 JS Array 物件
-# ==============================================================================
-def fetch_backend_data_from_python():
+def is_global_stock_code(df):
+    meta_keywords = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""]
+    exclude_keywords = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"]
+    mask_meta = df['stock'].str.upper().isin(meta_keywords) | df['name'].str.upper().isin(meta_keywords)
+    mask_exclude = df['stock'].str.upper().str.contains('|'.join(exclude_keywords)) | df['name'].str.upper().str.contains('|'.join(exclude_keywords))
+    return ~(mask_meta | mask_exclude)
+
+def calculate_continuous_status(df_target, sorted_dates, key_col='stock'):
+    status_dict = {}
+    if len(sorted_dates) < 2:
+        return {k: "-" for k in df_target[key_col].unique()}
+        
+    for code, group in df_target.groupby(key_col):
+        series = group.groupby('date')['volume'].sum().reindex(sorted_dates, fill_value=0)
+        diff_values = series.diff().values[::-1] 
+        
+        trend_count = 0
+        current_trend = ""
+        for d_vol in diff_values[:-1]:
+            if d_vol > 0:
+                if current_trend == "": current_trend = "買"
+                if current_trend == "買": trend_count += 1
+                else: break
+            elif d_vol < 0:
+                if current_trend == "": current_trend = "賣"
+                if current_trend == "賣": trend_count += 1
+                else: break
+            else:
+                break
+        status_dict[code] = f"連{current_trend} {trend_count} 日" if trend_count > 0 else "-"
+    return status_dict
+
+# ==========================================
+# 3. 主 UI 渲染
+# ==========================================
+def main():
+    # 頂部大標題
+    st.markdown('<div class="dashboard-header">📊 ETF 籌碼大數據監控面板</div>', unsafe_allow_html=True)
+
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
-        return None
+        st.error(err_msg)
+        return
+        
     df, clean_err = process_and_standardize(raw_data)
-    if clean_err or df.empty:
-        return None
-    
-    # 將清洗後的完整歷史資料轉成 dict 清單，再序列化為符合 JavaScript 陣列語法的標準 JSON 數據
-    records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False)
+    if clean_err:
+        st.error(clean_err)
+        return
+        
+    if df.empty:
+        st.info("💡 試算表目前為空，或日期轉換後無有效數據。")
+        return
 
-# ==============================================================================
-# 5. 主程式入口：讀取 index.html 並將真資料動態注入渲染
-# ==============================================================================
-def main():
-    html_filename = "index.html"
-    
-    if os.path.exists(html_filename):
-        with open(html_filename, "r", encoding="utf-8") as f:
-            html_content = f.read()
+    etf_list = sorted(df['etf'].dropna().unique().tolist())
+    if not etf_list:
+        st.warning("⚠️ 未在「ETF代號」欄位中偵測到任何資料。")
+        return
+
+    # 建立左右不對稱版面佈局 (左選單 1.1 : 右主頁面 3.5)
+    main_left, main_right = st.columns([1.1, 3.5])
+
+    # ------------------------------------------
+    # 左側控制台：請選擇 ETF 代號
+    # ------------------------------------------
+    with main_left:
+        st.markdown('<div class="white-panel-card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><b>🔍 選擇 ETF 代號</b></div>', unsafe_allow_html=True)
+        search_query = st.text_input("輸入關鍵字篩選...", placeholder="輸入關鍵字篩選...", label_visibility="collapsed", key="left_filter")
         
-        # 從 Google 試算表獲取最新清洗完畢的數據
-        python_data = fetch_backend_data_from_python()
+        filtered_etfs = [e for e in etf_list if search_query.lower() in e.lower()] if search_query else etf_list
         
-        if python_data:
-            # 🎯 修正點：加上反單引號 ` 或單引號 '，將其宣告為字串，讓前端的 JSON.parse() 能正確解析
-            html_content = html_content.replace('let globalRawData = [];', f'let globalRawData = `{python_data}`;')
+        if filtered_etfs:
+            selected_etf = st.radio("ETF清單列表", filtered_etfs, label_visibility="collapsed", key="left_etf_radio")
         else:
-            st.warning("⚠️ 後端未能成功讀取 Google 試算表資料，目前將顯示 index.html 預設資料。")
+            st.write("<small style='color:gray;'>無相符結果</small>", unsafe_allow_html=True)
+            selected_etf = None
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # 使用滿版無邊框 iframe 組件將 index.html 渲染出來（高度可依前端頁面長度自行調整）
-        components.html(html_content, height=1600, scrolling=True)
+    # ------------------------------------------
+    # 右側主控制台：核心大數據監控
+    # ------------------------------------------
+    with main_right:
+        if not selected_etf:
+            st.info("💡 請在左側選單選擇或篩選出欲查看的 ETF 代號。")
+            return
+            
+        df_etf = df[df['etf'] == selected_etf].copy()
+        if df_etf.empty:
+            st.warning(f"該 ETF ({selected_etf}) 查無關聯歷史明細。")
+            return
+            
+        sorted_dates = sorted(df_etf['date'].unique())
+        latest_date = sorted_dates[-1]
+
+        # 頂部控制面板：籌碼比較天數
+        st.markdown('<div class="white-panel-card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title"><b>🗃️ 籌碼比較天數 / 範圍邏輯</b></div>', unsafe_allow_html=True)
         
-    else:
-        # 防呆與目錄層級檢查提示
-        st.error(f"❌ 找不到 `{html_filename}` 檔案！")
-        st.info("請確認您的專案資料夾結構，`app.py` 與 `index.html` 必須放置在同一個目錄階層下喔！")
+        ctrl_c1, ctrl_c2 = st.columns([3, 1])
+        with ctrl_c1:
+            comp_option = st.selectbox(
+                "比較日選擇",
+                ["與前 1 筆紀錄比較 (日變動)", "與前 5 筆紀錄比較", "與前 10 筆紀錄比較"],
+                label_visibility="collapsed"
+            )
+            if "1" in comp_option: offset = 1
+            elif "5" in comp_option: offset = 5
+            else: offset = 10
+            
+            compare_index = max(0, len(sorted_dates) - 1 - offset)
+            compare_date = sorted_dates[compare_index]
+            
+        with ctrl_c2:
+            st.button("🧮 重新計算籌碼", use_container_width=True)
+            
+        st.markdown(f'<p style="font-size:0.85rem; color:#4a5568; margin: 8px 0 0 0;">📊 <b>籌碼分析區間：</b> 比較日 <span class="date-badge">{compare_date}</span> ➔ 基準日 <span class="date-badge">{latest_date}</span></p>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # 擷取最新日期的指標資料
+        df_latest = df_etf[df_etf['date'] == latest_date]
+        
+        def fetch_meta_val(key_name):
+            val_set = df_latest[df_latest['stock'] == key_name]['volume'].values
+            if len(val_set) > 0 and str(val_set[0]).strip() != "":
+                try:
+                    return f"{int(float(val_set[0])):,}"
+                except:
+                    return str(val_set[0])
+            return "-"
+
+        is_stock = is_global_stock_code(df_latest)
+        stocks_df = df_latest[is_stock].sort_values(by='weight', ascending=False).copy()
+        assets_df = df_latest[~is_stock].copy()
+
+        # 🌟 仿照 index.html 頂部 6 聯排獨立彩色頂邊框指標區塊
+        stock_vol_str = fetch_meta_val("股數") if "股數" in df_latest['stock'].values else f"{int(stocks_df['volume'].sum()):,}" if not stocks_df.empty else "-"
+        
+        st.markdown(f"""
+            <div class="meta-container">
+                <div class="meta-box" style="border-top: 4px solid #718096;"><div class="meta-title">昨收價</div><div class="meta-num">{fetch_meta_val("昨收價")}</div></div>
+                <div class="meta-box" style="border-top: 4px solid #e53e3e;"><div class="meta-title">漲跌</div><div class="meta-num">{fetch_meta_val("漲跌")}</div></div>
+                <div class="meta-box" style="border-top: 4px solid #3182ce;"><div class="meta-title">市價</div><div class="meta-num">{fetch_meta_val("市價")}</div></div>
+                <div class="meta-box" style="border-top: 4px solid #dd6b20;"><div class="meta-title">股數</div><div class="meta-num">{stock_vol_str}</div></div>
+                <div class="meta-box" style="border-top: 4px solid #805ad5;"><div class="meta-title">規模</div><div class="meta-num">{fetch_meta_val("規模")}</div></div>
+                <div class="meta-box" style="border-top: 4px solid #319795;"><div class="meta-title">折溢價</div><div class="meta-num">{fetch_meta_val("折溢價")}</div></div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # 中層雙表格佈局
+        sub_col1, sub_col2 = st.columns([2.1, 1.1])
+        
+        with sub_col1:
+            st.markdown('<div class="panel-title"><b>📋 最新成分股持股明細</b></div>', unsafe_allow_html=True)
+            st.dataframe(
+                stocks_df[['stock', 'name', 'weight', 'volume']],
+                use_container_width=True,
+                hide_index=True,
+                height=340,
+                column_config={
+                    "stock": st.column_config.TextColumn("股票代號"),
+                    "name": "股票名稱",
+                    "weight": st.column_config.NumberColumn("持股權重", format="%.2f%%"),
+                    "volume": st.column_config.NumberColumn("最新持股(股)", format="%d 股")
+                }
+            )
+            
+        with sub_col2:
+            st.markdown('<div class="panel-title"><b>🔒 非股票資產項目</b></div>', unsafe_allow_html=True)
+            st.dataframe(
+                assets_df[['stock', 'name', 'weight', 'volume']],
+                use_container_width=True,
+                hide_index=True,
+                height=340,
+                column_config={
+                    "stock": "資產代號",
+                    "name": "資產項目",
+                    "weight": st.column_config.TextColumn("權重"),
+                    "volume": st.column_config.NumberColumn("資產價值(股)", format="%d")
+                }
+            )
+
+        # 底部高質感深色動態分析看板表頭
+        st.markdown(f"""
+            <div class="dark-ribbon-header" style="margin-top: 1.5rem;">
+                <span>⚡ 動態籌碼異動計算與連續狀態追蹤</span>
+                <span style="font-size: 0.8rem; font-weight: 400; opacity: 0.85;">基準最新日: {latest_date}</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # 提取對比歷史數據
+        df_comp = df_etf[df_etf['date'] == compare_date]
+        df_merged = pd.merge(
+            stocks_df[['stock', 'name', 'volume']], 
+            df_comp[['stock', 'volume']], 
+            on='stock', 
+            how='outer', 
+            suffixes=('_new', '_old')
+        ).fillna(0)
+        
+        df_merged['diff'] = df_merged['volume_new'] - df_merged['volume_old']
+        df_change = df_merged[df_merged['diff'] != 0].copy()
+
+        if not df_change.empty:
+            def judge_nature(r):
+                if r['volume_old'] == 0 and r['volume_new'] > 0: return "新增"
+                if r['volume_old'] > 0 and r['diff'] > 0: return "增加"
+                if r['volume_new'] > 0 and r['diff'] < 0: return "減少"
+                return "刪除"
+            df_change['nature'] = df_change.apply(judge_nature, axis=1)
+            
+            # 動態狀態追蹤計算
+            status_map = calculate_continuous_status(df_etf[is_global_stock_code(df_etf)], sorted_dates, 'stock')
+            df_change['continuousStatus'] = df_change['stock'].map(status_map)
+            
+            st.dataframe(
+                df_change[['stock', 'name', 'nature', 'diff', 'continuousStatus']],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "stock": "成分股",
+                    "name": "股票名稱",
+                    "nature": "異動性質",
+                    "diff": st.column_config.NumberColumn("區間增減股數", format="%d 股"),
+                    "continuousStatus": "核心歷史連續買賣狀態"
+                }
+            )
+        else:
+            st.info("💡 該對比區間內，此 ETF 成分股持倉數量未發生任何增減變動。")
 
 if __name__ == "__main__":
     main()
