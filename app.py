@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import gspread
@@ -17,26 +16,18 @@ st.set_page_config(
 
 # ==============================================================================
 # 2. 強大隱藏術：注入 CSS 拔除 Streamlit 所有原生邊框與元件
-#    讓網頁能夠 100% 滿版無縫填滿整個螢幕，完全交由 index.html 渲染
 # ==============================================================================
 st.markdown("""
     <style>
-    /* 隱藏頂部主選單與裝飾條 */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
-    
-    /* 隱藏底部浮水印 footer */
     footer {visibility: hidden;}
-    
-    /* 將 Streamlit 預設的主容器邊距（Padding）歸零 */
     .block-container {
         padding-top: 0rem !important;
         padding-bottom: 0rem !important;
         padding-left: 0rem !important;
         padding-right: 0rem !important;
     }
-    
-    /* 確保內嵌的 iframe 底部沒有奇異的空白間距 */
     iframe {
         display: block;
         border: none;
@@ -132,10 +123,6 @@ def process_and_standardize(raw_data):
     
     return df, None
 
-# ==============================================================================
-# 4. 【純後端資料清洗與打包】
-#    移除原本在 Python 裡的 UI 邏輯，純粹將 Google Sheets 資料轉為前端所需的 JS Array 物件
-# ==============================================================================
 def fetch_backend_data_from_python():
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
@@ -144,12 +131,11 @@ def fetch_backend_data_from_python():
     if clean_err or df.empty:
         return None
     
-    # 將清洗後的完整歷史資料轉成 dict 清單，再序列化為符合 JavaScript 陣列語法的標準 JSON 數據
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False)
 
 # ==============================================================================
-# 5. 主程式入口：讀取 index.html 並將真資料動態注入渲染
+# 5. 主程式入口：使用 st.html 替代 components.html
 # ==============================================================================
 def main():
     html_filename = "index.html"
@@ -158,22 +144,18 @@ def main():
         with open(html_filename, "r", encoding="utf-8") as f:
             html_content = f.read()
         
-        # 從 Google 試算表獲取最新清洗完畢的數據
         python_data = fetch_backend_data_from_python()
         
         if python_data:
-            # 🎯 精準對接點：將 index.html 裡的空陣列變數替換成真正的 JavaScript 陣列資料
             html_content = html_content.replace('let globalRawData = [];', f'let globalRawData = {python_data};')
         else:
             st.warning("⚠️ 後端未能成功讀取 Google 試算表資料，目前將顯示 index.html 預設資料。")
 
-        # 使用滿版無邊框 iframe 組件將 index.html 渲染出來（高度可依前端頁面長度自行調整）
-        components.html(html_content, height=1600, scrolling=True)
+        # 🎯 改用 st.html 進行滿版渲染，它不依賴額外的 components 模組
+        st.html(html_content)
         
     else:
-        # 防呆與目錄層級檢查提示
         st.error(f"❌ 找不到 `{html_filename}` 檔案！")
-        st.info("請確認您的專案資料夾結構，`app.py` 與 `index.html` 必須放置在同一個目錄階層下喔！")
 
 if __name__ == "__main__":
     main()
