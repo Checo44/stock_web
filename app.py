@@ -175,10 +175,8 @@ def fetch_backend_data_to_json():
 # 4. 主渲染邏輯（使用標準字串避免大括號衝突）
 # ==========================================
 def main():
-    # 抓取並編譯真數據
     json_data = fetch_backend_data_to_json()
 
-    # 使用普通字串，內部完全保留原始 JavaScript 結構，不與 Python 衝突
     html_template = """
     <!DOCTYPE html>
     <html>
@@ -290,9 +288,12 @@ def main():
           font-weight: bold;
           font-size: 0.85rem;
         }
-        .badge-nature-new { background-color: #7c3aed; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        /* 👈 修正點 1：新增（亮金橘喜氣色）、刪除（黑灰底色）的獨立標籤樣式 */
+        .badge-nature-new { background-color: #f97316; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-up { background-color: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
         .badge-nature-down { background-color: #0f766e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge-nature-delete { background-color: #374151; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        
         .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
         .badge-trend-sell { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #fde68a; }
       </style>
@@ -634,7 +635,6 @@ def main():
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
       <script>
-        // 🚀 真實數據安全注入
         let globalRawData = __DATA_PLACEHOLDER__;
         let activeEtf = "";
 
@@ -753,37 +753,53 @@ def main():
 
         function renderChangeTable(etfData, sortedDates, latestDate) {
             let compareDate = document.getElementById('startDate').value;
-            document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼 analysis 區間：</b> 比較日 <span class="badge bg-light text-dark border">${compareDate}</span> ➔ 基準日 <span class="badge bg-light text-dark border">${latestDate}</span>`;
+            document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼區間：</b> 比較日 <span class="badge bg-light text-dark border">${compareDate}</span> ➔ 基準日 <span class="badge bg-light text-dark border">${latestDate}</span>`;
             document.getElementById('compareDateBadge').innerText = `對比區間: ${compareDate} ~ ${latestDate}`;
 
             let currentStocks = etfData.filter(d => d.date === latestDate && isNormalStock(d.stock, d.name));
             let compRows = etfData.filter(d => d.date === compareDate);
 
+            // 👈 修正點 2：高穩定、絕不留空的連續買賣狀態逆向掃描計算
             let trendMap = {};
             if (sortedDates.length >= 2) {
                 let uniqStocks = [...new Set(etfData.filter(d => isNormalStock(d.stock, d.name)).map(d => d.stock))];
                 uniqStocks.forEach(sCode => {
-                    let diffs = [];
-                    for(let i=1; i<sortedDates.length; i++) {
-                        let v1 = etfData.find(d => d.date === sortedDates[i-1] && d.stock === sCode)?.volume || 0;
-                        let v2 = etfData.find(d => d.date === sortedDates[i] && d.stock === sCode)?.volume || 0;
-                        diffs.push(v2 - v1);
-                    }
-                    let rev = [...diffs].reverse();
-                    if(rev.length > 0 && rev[0] !== 0) {
-                        let isBuy = rev[0] > 0;
-                        let c = 0;
-                        for(let d of rev) {
-                            if((isBuy && d > 0) || (!isBuy && d < 0)) c++; else break;
+                    let streakCount = 0;
+                    let currentTrend = null; // "買" or "賣"
+
+                    // 從最後一天（最新）開始往前逆向掃描歷史
+                    for (let i = sortedDates.length - 1; i > 0; i--) {
+                        let dNew = sortedDates[i];
+                        let dOld = sortedDates[i - 1];
+
+                        let vNew = etfData.find(d => d.date === dNew && d.stock === sCode)?.volume || 0;
+                        let vOld = etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
+                        let diff = vNew - vOld;
+
+                        if (diff === 0) {
+                            break; // 只要有一天無任何增減變動，連續狀態即被中斷
                         }
-                        trendMap[sCode] = `連${isBuy ? '買' : '賣'} ${c} 日`;
+
+                        let dayTrend = diff > 0 ? "買" : "賣";
+
+                        if (currentTrend === null) {
+                            currentTrend = dayTrend; // 錨定最新一天的方向
+                            streakCount = 1;
+                        } else if (dayTrend === currentTrend) {
+                            streakCount++; // 方向相同，連續計數加 1
+                        } else {
+                            break; // 一旦反轉，立即中斷
+                        }
+                    }
+
+                    if (streakCount > 0 && currentTrend !== null) {
+                        trendMap[sCode] = `連${currentTrend} ${streakCount} 日`;
                     } else {
-                        trendMap[sCode] = "-";
+                        trendMap[sCode] = "無變動";
                     }
                 });
             }
 
-            // 👈 核心變更點：建立 4 個容器以便最後依序「新增 -> 增加 -> 減少 -> 刪除」串接排序
             let htmlNew = "";
             let htmlAdd = "";
             let htmlSub = "";
@@ -796,22 +812,22 @@ def main():
                 if (diff !== 0) {
                     let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
                     
-                    // 👈 核心變更點：新增與增加在樣式上做出區分，其餘保留
+                    // 👈 修正點 1：全新顏色配置（新增:喜氣橘紅，增加:大紅，減少:藍綠）
                     let badge = "";
                     let dStyle = "";
                     if (nature === "新增") {
                         badge = `<span class="badge-nature-new">${nature}</span>`;
-                        dStyle = "color:#7c3aed;"; // 紫色
+                        dStyle = "color:#ea580c;"; // 喜氣亮橘紅
                     } else if (nature === "增加") {
                         badge = `<span class="badge-nature-up">${nature}</span>`;
-                        dStyle = "color:#dc2626;"; // 紅色
+                        dStyle = "color:#dc2626;"; // 大紅
                     } else {
                         badge = `<span class="badge-nature-down">${nature}</span>`;
-                        dStyle = "color:#0f766e;"; // 藍綠色
+                        dStyle = "color:#0f766e;"; // 藍綠
                     }
                     
-                    let trendStr = trendMap[r.stock] || "-";
-                    let trendHtml = `<span class="text-muted">-</span>`;
+                    let trendStr = trendMap[r.stock] || "無變動";
+                    let trendHtml = `<span class="text-muted">無變動</span>`;
                     if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
                     if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
 
@@ -823,34 +839,38 @@ def main():
                             <td class="px-4">${trendHtml}</td>
                         </tr>`;
 
-                    // 👈 依照狀態派發至對應的分組字串
                     if (nature === "新增") htmlNew += rowHtml;
                     else if (nature === "增加") htmlAdd += rowHtml;
                     else if (nature === "減少") htmlSub += rowHtml;
                 }
             });
 
-            // 👈 檢查是否有被刪除的成分股（舊日期有，新日期沒有的正常股票）
             compRows.forEach(r => {
                 if (isNormalStock(r.stock, r.name)) {
                     let isStillExist = currentStocks.some(c => c.stock === r.stock);
                     if (!isStillExist && r.volume > 0) {
-                        let badge = `<span class="badge-nature-down">刪除</span>`;
-                        let dStyle = "color:#6b7280;"; // 灰暗色代表移除
+                        // 👈 修正點 1：刪除改為極具質感的黑灰底色
+                        let badge = `<span class="badge-nature-delete">刪除</span>`;
+                        let dStyle = "color:#4b5563;"; // 灰黑色字體
                         let diff = -r.volume;
+                        
+                        let trendStr = trendMap[r.stock] || "無變動";
+                        let trendHtml = `<span class="text-muted">無變動</span>`;
+                        if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
+                        if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
                         
                         htmlDel += `
                             <tr>
                                 <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
                                 <td>${badge}</td>
                                 <td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(diff).toLocaleString()} 股</td>
-                                <td class="px-4"><span class="text-muted">-</span></td>
+                                <td class="px-4">${trendHtml}</td>
                             </tr>`;
                     }
                 }
             });
 
-            // 👈 依照「新增 -> 增加 -> 減少 -> 刪除」依序組合輸出
+            // 👈 依據指定順序串接：新增 -> 增加 -> 減少 -> 刪除
             let changeHtml = htmlNew + htmlAdd + htmlSub + htmlDel;
             document.getElementById('changeTableBody').innerHTML = changeHtml || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
         }
