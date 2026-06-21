@@ -123,8 +123,14 @@ def load_historical_data():
         return pd.DataFrame()
     try:
         ws = sh.worksheet(WORKSHEET_HISTORY)
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
+        
+        # 💡 關鍵修復：改用 get_all_values() 讀取純字串矩陣，徹底封印 gspread 自動轉型帶來的 Bug
+        raw_data = ws.get_all_values()
+        if not raw_data or len(raw_data) < 2:
+            return pd.DataFrame()
+            
+        # 將第一列視為 Header，其餘列視為 Row Data
+        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
         return standardize_df(df)
     except Exception as e:
         st.error(f"❌ 讀取工作表「{WORKSHEET_HISTORY}」失敗: {e}")
@@ -159,22 +165,25 @@ def standardize_df(df):
             
     df = df.rename(columns=rename_dict)
     
-    # 💥 容錯優化：解決空字串與留白引發的 float 轉型錯誤
-    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+    # 完美的 Pandas 向量化清洗與空值強制容錯
+    df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
     
-    # 清洗權重欄位 (移除 % 與千分號，並容錯空值)
+    # 清洗權重欄位 (安全排除百分號與千分號，將空字串與空格轉為 0.0)
     df['weight'] = df['weight'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False).str.strip()
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(0.0)
     if df['weight'].max() <= 1.0: 
         df['weight'] = df['weight'] * 100
         
-    # 清洗持有數量欄位 (移除千分號，並容錯空值)
+    # 清洗持有數量欄位 (安全排除千分號，將空字串與空格轉為 0.0)
     df['volume'] = df['volume'].astype(str).str.replace(',', '', regex=False).str.strip()
     df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0.0)
     
     df['stock'] = df['stock'].astype(str).str.strip()
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
+    
+    # 過濾因轉型失敗產生無效日期的不完整資料行
+    df = df.dropna(subset=['date'])
     
     return df
 
