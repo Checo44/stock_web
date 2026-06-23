@@ -6,7 +6,7 @@ import gspread
 import json
 import os
 import requests
-from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup  # 替換掉 playwright
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -118,39 +118,42 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組
+# 3. 外部即時行情 API 整合模組 (修正：改用 requests 避開 Playwright 環境報錯)
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    僅爬取 Pocket.tw 的 ETF 最新「淨值」數據
-    對應提供表格結構的 cells[2]
+    使用純 requests 抓取 Pocket.tw 的 ETF 最新「淨值」數據
+    避開雲端環境上 Playwright 無法啟動 Chromium 的錯誤
     """
     results = {}
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        for code in etf_list:
-            try:
-                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
-                page = browser.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # 抓取表格中第二行（最新一日）的資料
-                table = page.locator("table").first
-                rows = table.locator("tr")
-                nav = "-"
-                
-                if rows.count() > 1:
-                    cells = rows.nth(1).locator("td").all_inner_texts()
-                    # 根據表格結構：[0]日期, [1]收盤價, [2]淨值, [3]折溢價%
-                    if len(cells) >= 3:
-                        nav = cells[2].strip()
-                
-                results[code] = {"nav": nav}
-                page.close()
-            except Exception as e:
-                print(f"[{code}] 淨值爬取失敗: {e}")
-                results[code] = {"nav": "-"}
-        browser.close()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    for code in etf_list:
+        try:
+            url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
+            res = requests.get(url, headers=headers, timeout=15)
+            nav = "-"
+            
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, "html.parser")
+                # 尋找網頁中的第一個 table
+                table = soup.find("table")
+                if table:
+                    rows = table.find_all("tr")
+                    # rows[0] 是表頭，rows[1] 是最新一日的資料
+                    if len(rows) > 1:
+                        cells = [td.get_text().strip() for td in rows[1].find_all("td")]
+                        # 根據表格結構：[0]日期, [1]收盤價, [2]淨值, [3]折溢價%
+                        if len(cells) >= 3:
+                            nav = cells[2]
+            
+            results[code] = {"nav": nav}
+        except Exception as e:
+            print(f"[{code}] 淨值爬取失敗: {e}")
+            results[code] = {"nav": "-"}
+            
     return results
 
 def fetch_twse_live_data(etf_list):
@@ -265,7 +268,7 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    # 呼叫更新後的 Pocket 爬蟲（只留 nav 數據）
+    # 呼叫不需要 Playwright 的全新 Pocket 爬蟲
     pocket_market_data = fetch_pocket_etf_data(all_etfs)
     
     records = df.to_dict(orient="records")
@@ -749,7 +752,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析’」載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -845,7 +848,7 @@ def main():
         }
 
         function isNormalStock(code, name) {
-            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
+            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "淨值", "昨收", "UNDEFINED", "NULL", ""];
             let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"];
             if (meta.includes(code) || meta.includes(name)) return false;
             if (cashEx.some(k => code.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
@@ -898,12 +901,11 @@ def main():
                 setMetaFallback();
             }
 
-            // 讀取從 Pocket 爬回來的最新一日「淨值」
+            // 讀取最新的一日「淨值」
             let liveData = pocketMarketData[etfName] || null;
             if (liveData && liveData.nav) {
                 document.getElementById('metaNav').innerText = liveData.nav;
             } else {
-                // 若爬取失敗，尋找 Google 試算表中有無可能暫存的淨值欄位
                 document.getElementById('metaNav').innerText = (latestRows.find(r => r.stock === "淨值")?.volume || "-");
             }
 
