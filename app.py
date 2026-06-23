@@ -42,721 +42,815 @@ def get_sheets_client():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
     if not creds_json and "GOOGLE_CREDENTIALS" in st.secrets:
         creds_json = st.secrets["GOOGLE_CREDENTIALS"]
-        
+
     if creds_json:
         try:
-            import json
-            creds_dict = json.loads(creds_json)
-            return gspread.service_account_from_dict(creds_dict)
-        except Exception as e:
-            st.error(f"憑證解析失敗: {e}")
-    
-    # 嘗試預設路徑
-    possible_paths = [
-        "account.json",
-        "../account.json",
-        "config/account.json"
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return gspread.service_account(filename=path)
-            
-    st.error("找不到任何合法的 Google 憑證 (環境變數、Secrets 或本地 json)。")
-    st.stop()
-
-@st.cache_data(ttl=600)  # 快取 10 分鐘防止過度讀取
-def load_all_sheets_data():
-    try:
-        client = get_sheets_client()
-        sh = client.open(SHEET_NAME)
-        
-        # 1. 讀取歷史成分股資料
-        w_history = sh.worksheet(WORKSHEET_HISTORY)
-        raw_history = w_history.get_all_records()
-        df_hist = pd.DataFrame(raw_history)
-        
-        # 2. 讀取代號對照表
-        try:
-            w_ticker = sh.worksheet(WORKSHEET_TICKER)
-            df_tick = pd.DataFrame(w_ticker.get_all_records())
-            ticker_map = dict(zip(df_tick.iloc[:, 0].astype(str), df_tick.iloc[:, 1].astype(str)))
+            clean_json = creds_json.strip().strip("'").strip('"')
+            return gspread.service_account_from_dict(json.loads(clean_json))
         except:
-            ticker_map = {}
-            
-        # 3. 讀取 ETF 名稱對照表
-        try:
-            w_etf_name = sh.worksheet(WORKSHEET_ETF_NAME)
-            df_etf_name = pd.DataFrame(w_etf_name.get_all_records())
-            etf_name_map = dict(zip(df_etf_name.iloc[:, 0].astype(str), df_etf_name.iloc[:, 1].astype(str)))
-        except:
-            etf_name_map = {}
-            
-        return df_hist, ticker_map, etf_name_map
-    except Exception as e:
-        st.error(f"Google Sheets 載入發生異常錯誤: {e}")
-        st.stop()
+            pass
 
-# ==========================================
-# 3. 證交所與玩股網即時盤態 APIs
-# ==========================================
-@st.cache_data(ttl=60)  # 即時價格快取 1 分鐘
-def fetch_twse_live_market(etf_codes):
-    """ 從證交所 Mis 系統批量撈取最新市價與張數變動 """
-    if not etf_codes:
-        return {}
-    results = {}
-    try:
-        # 構造證交所與櫃買中心查詢參數
-        param_list = []
-        for code in etf_codes:
-            # 台灣大部分熱門ETF在證交所(tse)，少數可能在櫃買(otc)，此處採雙向快配機制或預設 tse
-            param_list.append(f"tse_{code}.tw")
-            param_list.append(f"otc_{code}.tw")
-            
-        url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={'|'.join(param_list)}"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            if "msgArray" in data:
-                for row in data["msgArray"]:
-                    c = row.get("c") # 代號
-                    if c in etf_codes:
-                        results[c] = row
-    except Exception as e:
-        pass
-    return results
+    json_path = os.path.join(os.getcwd(), 'credentials.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return gspread.service_account_from_dict(json.load(f))
+    return None
 
-@st.cache_data(ttl=60)
-def fetch_wantgoo_etf_live():
-    """ 撈取玩股網全市場折溢價即時大數據 """
-    url = "https://www.wantgoo.com/api/etf/all"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.wantgoo.com/"
-    }
-    results = {}
+@st.cache_resource
+def init_gspread():
     try:
-        resp = requests.get(url, headers=headers, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            # 假設結構為 list 或是帶 data 節點，依實際情況解析
-            items = data if isinstance(data, list) else data.get("data", [])
-            for item in items:
-                id_code = item.get("id") or item.get("code")
-                if id_code:
-                    results[str(id_code).strip()] = {
-                        "premium": item.get("discountPremiumRate") or item.get("premiumRate") or 0.0,
-                        "nav": item.get("nav") or 0.0,
-                        "price": item.get("price") or 0.0
-                    }
+        gc = get_sheets_client()
+        if gc: return gc.open(SHEET_NAME)
     except:
         pass
-    return results
+    return None
+
+sh = init_gspread()
+
+@st.cache_data(ttl=300)
+def fetch_raw_sheet_data():
+    if not sh: 
+        return None, "無法連線至 Google 試算表，請檢查憑證設定。"
+    try:
+        ws = sh.worksheet(WORKSHEET_HISTORY)
+        raw_data = ws.get_all_values()
+        if not raw_data or len(raw_data) < 2:
+            return None, f"工作表「{WORKSHEET_HISTORY}」內沒有足夠的數據列。"
+        return raw_data, None
+    except Exception as e:
+        return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
+
+@st.cache_data(ttl=300)
+def fetch_ticker_mapping():
+    if not sh: return {}, "無法連線至 Google 試算表"
+    try:
+        ws = sh.worksheet(WORKSHEET_TICKER)
+        raw_ticker = ws.get_all_values()
+        if not raw_ticker or len(raw_ticker) < 1: return {}, None
+        
+        ticker_map = {}
+        for row in raw_ticker[1:]:
+            if len(row) >= 2:
+                code = str(row[0]).strip()
+                name = str(row[1]).strip()
+                if code: ticker_map[code] = name
+        return ticker_map, None
+    except Exception as e:
+        return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
+
+@st.cache_data(ttl=300)
+def fetch_etf_name_mapping():
+    if not sh: return {}, "無法連線至 Google 試算表"
+    try:
+        ws = sh.worksheet(WORKSHEET_ETF_NAME)
+        raw_etf = ws.get_all_values()
+        if not raw_etf or len(raw_etf) < 1: return {}, None
+        
+        etf_name_map = {}
+        for row in raw_etf[1:]:
+            if len(row) >= 3:
+                code = str(row[1]).strip()   
+                name = str(row[2]).strip()   
+                if code: etf_name_map[code] = name
+        return etf_name_map, None
+    except Exception as e:
+        return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 4. 主程式控制器與資料處理
+# 3. 外部即時行情 API 整合模組
 # ==========================================
-df_hist, ticker_map, etf_name_map = load_all_sheets_data()
+def fetch_wantgoo_etf_data():
+    api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.wantgoo.com/stock/etf/net-value"
+    }
+    try:
+        res = requests.get(api_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            market_data = {}
+            for item in res.json():
+                stock_no = str(item.get("stockNo", "")).strip()
+                if stock_no:
+                    market_data[stock_no] = {
+                        "price": item.get("price", "-"),
+                        "change": item.get("changeValue", "-"), 
+                        "premium": item.get("discountPremiumRate", "-"), 
+                        "volume": item.get("volume", "-") 
+                    }
+            return market_data
+    except Exception as e:
+        print(f"玩股網爬蟲異常: {e}")
+    return {}
 
-# 格式清理
-df_hist['etf'] = df_hist['etf'].astype(str).str.strip()
-df_hist['stock'] = df_hist['stock'].astype(str).str.strip()
-df_hist['name'] = df_hist['name'].astype(str).str.strip()
-df_hist['date'] = df_hist['date'].astype(str).str.strip()
-df_hist['weight'] = pd.to_numeric(df_hist['weight'], errors='coerce').fillna(0.0)
-df_hist['volume'] = pd.to_numeric(df_hist['volume'], errors='coerce').fillna(0.0)
+def fetch_twse_live_data(etf_list):
+    if not etf_list:
+        return {}
+    
+    valid_etfs = []
+    for code in etf_list:
+        c_clean = str(code).strip()
+        if c_clean and (c_clean.isdigit() or len(c_clean) >= 4):
+            valid_etfs.append(c_clean)
 
-# 獲取全市場 ETF 清單
-all_etf_codes = sorted(df_hist['etf'].unique().tolist())
+    if not valid_etfs:
+        return {}
 
-# 併入即時第三方大數據
-twse_live_data = fetch_twse_live_market(all_etf_codes)
-wantgoo_live_data = fetch_wantgoo_etf_live()
+    twse_market_data = {}
+    
+    ch_elements = []
+    for code in valid_etfs:
+        ch_elements.append(f"tse_{code}.tw")
+        ch_elements.append(f"otc_{code}.tw")
+        
+    ch_param = "|".join(ch_elements)
+    api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://mis.twse.com.tw/"
+    }
+    try:
+        res = requests.get(api_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            res_json = res.json()
+            msg_array = res_json.get("msgArray", [])
+            for msg in msg_array:
+                ex_ch = msg.get("c", "").strip() 
+                if ex_ch:
+                    twse_market_data[ex_ch] = {
+                        "d": msg.get("d", ""),  
+                        "z": msg.get("z", "-"),  
+                        "p": msg.get("p", "-"),  
+                        "y": msg.get("y", "-"),  
+                        "v": msg.get("v", "0")   
+                    }
+    except Exception as e:
+        print(f"證交所後端連線異常: {e}")
+    return twse_market_data
 
-# 轉為前端 JSON 格式
-json_data = df_hist.to_json(orient="records", force_ascii=False)
-wantgoo_json = json.dumps(wantgoo_live_data, ensure_ascii=False)
-twse_json = json.dumps(twse_live_data, ensure_ascii=False)
-ticker_json = json.dumps(ticker_map, ensure_ascii=False)
-etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+def process_and_standardize(raw_data, ticker_map=None):
+    df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+    df.columns = [str(c).strip() for c in df.columns]
+    
+    alias_map = {
+        "etf": ["ETF代號", "ETF", "ETF碼"],
+        "date": ["日期", "時間", "Date"],
+        "stock": ["成分股代號", "股票代號", "代號", "商品代號"],
+        "name": ["成分股名稱", "股票名稱", "名稱", "商品名稱"],
+        "weight": ["持股權重", "權重", "權重(%)", "持股比例"],
+        "volume": ["持有數量", "持有數", "張數", "持有張數", "股數", "持有股數"]
+    }
+    
+    rename_dict = {}
+    for standard, aliases in alias_map.items():
+        for alias in aliases:
+            if alias in df.columns:
+                rename_dict[alias] = standard
+                break
+                
+    orig_name_col = None
+    for alias in alias_map["name"]:
+        if alias in df.columns:
+            orig_name_col = alias
+            break
+
+    df = df.rename(columns=rename_dict)
+    
+    missing = [k for k in ["etf", "date", "stock", "weight", "volume"] if k not in df.columns]
+    if missing:
+        return pd.DataFrame(), f"主要欄位對照失敗。缺少對應: {missing}"
+
+    df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
+    df = df.dropna(subset=['date'])
+    
+    df['weight'] = pd.to_numeric(df['weight'].astype(str).str.replace('%','', regex=False).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
+    if df['weight'].max() <= 1.0: 
+        df['weight'] = df['weight'] * 100
+        
+    df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
+    df['stock'] = df['stock'].astype(str).str.strip()
+    df['etf'] = df['etf'].astype(str).str.strip()
+    
+    if ticker_map:
+        mapped_series = df['stock'].map(ticker_map)
+        backup_col = orig_name_col if (orig_name_col and orig_name_col in df.columns) else 'name'
+        df['name'] = mapped_series.fillna(df[backup_col].astype(str).str.strip())
+    else:
+        df['name'] = df['name'].astype(str).str.strip()
+        
+    return df, None
 
 # ==========================================
-# 5. 極致前端多功能儀表面板 (HTML5 / Bootstrap 5 / Bi Icons)
+# 4. 主核心資料庫結構轉換與打包
 # ==========================================
-html_template = """
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF 籌碼監控核心面板</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
-    <style>
-        :root {
-            --primary-color: #2563eb;
-            --secondary-color: #475569;
-            --bg-light: #f8fafc;
-            --card-border: #e2e8f0;
-        }
+def fetch_backend_data_to_json():
+    raw_data, err_msg = fetch_raw_sheet_data()
+    if err_msg: return "[]", {}, {}, {}, {}
+        
+    ticker_map, _ = fetch_ticker_mapping()
+    etf_name_map, _ = fetch_etf_name_mapping()
+    
+    df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
+    if clean_err or df.empty: return "[]", {}, {}, {}, {}
+    
+    all_etfs = sorted(list(df['etf'].dropna().unique()))
+    twse_live_market = fetch_twse_live_data(all_etfs)
+    
+    wantgoo_data = fetch_wantgoo_etf_data()
+    records = df.to_dict(orient="records")
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
+
+# ==========================================
+# 5. 主渲染邏輯
+# ==========================================
+def main():
+    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
+    wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
+    twse_json = json.dumps(twse_live_market, ensure_ascii=False)
+    ticker_json = json.dumps(ticker_map, ensure_ascii=False)
+    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>ETF 籌碼大數據監控面板</title>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+      
+      <style>
         body {
-            background-color: #f1f5f9;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            color: #1e293b;
-            padding: 12px;
+          font-family: 'Noto Sans TC', sans-serif;
+          background-color: #f4f6f9;
+          color: #333;
         }
-        .main-card {
-            background: #ffffff;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-            border: 1px solid var(--card-border);
-            margin-bottom: 16px;
+        .navbar {
+          background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
-        .nav-tabs {
-            border-bottom: 2px solid #e2e8f0;
-            background: #ffffff;
-            padding: 8px 12px 0 12px;
-            border-radius: 12px 12px 0 0;
+        .card {
+          border: none;
+          border-radius: 12px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+          margin-bottom: 1.5rem;
+          background-color: #fff;
         }
+        .card-header {
+          background-color: #fff;
+          border-bottom: 1px solid #edf2f9;
+          font-weight: 700;
+          font-size: 1.1rem;
+          padding: 1rem 1.25rem;
+          border-top-left-radius: 12px !important;
+          border-top-right-radius: 12px !important;
+        }
+        .table {
+          margin-bottom: 0;
+        }
+        .table th {
+          background-color: #f8fafd;
+          color: #4a5568;
+          font-weight: 600;
+        }
+        .meta-card {
+          background: #ffffff;
+          border-left: 4px solid #2a5298;
+          padding: 12px;
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+          text-align: center;
+        }
+        .meta-label {
+          font-size: 0.85rem;
+          color: #718096;
+          margin-bottom: 4px;
+        }
+        .meta-value {
+          font-size: 1.15rem;
+          font-weight: 700;
+          color: #1a202c;
+        }
+        
         .nav-tabs .nav-link {
-            border: none;
-            color: var(--secondary-color);
-            font-weight: 600;
-            padding: 10px 16px;
-            border-radius: 6px 6px 0 0;
-            margin-right: 4px;
-            transition: all 0.2s ease;
-        }
-        .nav-tabs .nav-link:hover {
-            background-color: #f1f5f9;
-            color: var(--primary-color);
+          border: none;
+          color: #4a5568;
+          font-weight: 500;
+          padding: 0.75rem 1.25rem;
+          border-radius: 8px;
+          cursor: pointer;
         }
         .nav-tabs .nav-link.active {
-            color: var(--primary-color);
-            background-color: #ffffff;
-            border-bottom: 3px solid var(--primary-color);
+          background-color: #e2e8f0;
+          color: #1e3c72;
+          font-weight: 700;
         }
+        
         .custom-tab-content {
-            display: none;
-            padding: 16px;
-            background: #ffffff;
-            border-radius: 0 0 12px 12px;
-            border: 1px solid var(--card-border);
-            border-top: none;
+          display: none;
         }
         .custom-tab-content.active {
-            display: block;
+          display: block;
         }
-        .etf-sidebar {
-            max-height: 720px;
-            overflow-y: auto;
-            border: 1px solid var(--card-border);
-            border-radius: 8px;
+
+        .loading-overlay {
+          position: fixed;
+          top: 0; left: 0; width: 100%; height: 100%;
+          background: rgba(255,255,255,0.7);
+          display: flex; justify-content: center; align-items: center;
+          z-index: 9999; display: flex;
+        }
+        .etf-list-group {
+          max-height: 700px;
+          overflow-y: auto;
         }
         .etf-item-btn {
-            border: none;
-            border-bottom: 1px solid #f1f5f9;
-            padding: 11px 14px;
-            text-align: left;
-            font-weight: 500;
-            font-size: 0.95rem;
-            transition: all 0.15s;
+          text-align: left;
+          border-radius: 8px !important;
+          margin-bottom: 4px;
+          border: 1px solid #e2e8f0;
+          transition: all 0.2s;
+        }
+        .etf-item-btn:hover {
+          background-color: #f1f5f9;
         }
         .etf-item-btn.active {
-            background-color: #eff6ff !important;
-            color: var(--primary-color) !important;
-            font-weight: 700;
-            border-left: 4px solid var(--primary-color);
+          background-color: #1e3c72 !important;
+          border-color: #1e3c72 !important;
+          color: #fff !important;
+          font-weight: bold;
         }
-        .table-container {
-            max-height: 520px;
-            overflow-y: auto;
-            border: 1px solid var(--card-border);
-            border-radius: 8px;
+        .rank-badge {
+          width: 24px;
+          height: 24px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-weight: bold;
+          font-size: 0.85rem;
         }
-        .table thead th {
-            position: sticky;
-            top: 0;
-            background-color: #f8fafc;
-            z-index: 10;
-            border-bottom: 2px solid #e2e8f0;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+        .badge-nature-new { background-color: #f97316; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge-nature-up { background-color: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge-nature-down { background-color: #0f766e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge-nature-delete { background-color: #374151; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        
+        .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
+        .badge-trend-sell { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #fde68a; }
+        
+        .etf-title-display {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: #1e3c72;
+          margin-bottom: 0.75rem;
+          padding-left: 4px;
+          display: flex;
+          align-items: center;
         }
-        .meta-box {
-            background: #f8fafc;
-            border: 1px solid var(--card-border);
-            border-radius: 8px;
-            padding: 12px 16px;
-            text-align: center;
-        }
-        .meta-box h6 {
-            margin-bottom: 4px;
-            color: #64748b;
-            font-size: 0.8rem;
-            font-weight: 700;
-        }
-        .meta-box p {
-            margin: 0;
-            font-size: 1.35rem;
-            font-weight: 800;
+        .update-date-text {
+          font-size: 0.9rem;
+          font-weight: 400;
+          color: #6c757d;
+          margin-left: 12px;
         }
         .suggestion-box {
-            position: absolute;
-            background: white;
-            border: 1px solid #cbd5e1;
-            border-radius: 6px;
-            width: 100%;
-            max-height: 250px;
-            overflow-y: auto;
-            z-index: 999;
-            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
-            display: none;
+          position: absolute;
+          background: white;
+          border: 1px solid #ced4da;
+          border-top: none;
+          z-index: 1000;
+          max-height: 200px;
+          overflow-y: auto;
+          width: 100%;
+          border-bottom-left-radius: 8px;
+          border-bottom-right-radius: 8px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         .suggestion-item {
-            padding: 8px 12px;
-            cursor: pointer;
-            border-bottom: 1px solid #f1f5f9;
-            font-size: 0.9rem;
+          padding: 10px 15px;
+          cursor: pointer;
         }
         .suggestion-item:hover {
-            background-color: #f1f5f9;
-            color: var(--primary-color);
+          background-color: #f1f5f9;
         }
-        .badge-nature-new { background-color: #ffedd5; color: #ea580c; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
-        .badge-nature-up { background-color: #fee2e2; color: #dc2626; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
-        .badge-nature-down { background-color: #ccfbf1; color: #0f766e; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
-        .badge-nature-delete { background-color: #f3f4f6; color: #4b5563; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; }
-        .badge-trend-buy { background-color: #fef2f2; color: #b91c1c; padding: 2px 6px; border-radius: 4px; border: 1px solid #fca5a5; font-size: 0.78rem; font-weight: 600;}
-        .badge-trend-sell { background-color: #f0fdfa; color: #0d9488; padding: 2px 6px; border-radius: 4px; border: 1px solid #99f6e4; font-size: 0.78rem; font-weight: 600;}
-        
         .selected-stock-tag {
-            display: inline-flex;
-            align-items: center;
-            background-color: #e0f2fe;
-            color: #0369a1;
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 0.88rem;
-            font-weight: 600;
-            margin: 4px;
-            border: 1px solid #bae6fd;
+          background-color: #e2e8f0;
+          color: #1e3c72;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-weight: 500;
+          font-size: 0.9rem;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
         }
         .selected-stock-tag i {
-            margin-left: 6px;
-            cursor: pointer;
-            color: #0284c7;
+          cursor: pointer;
+          color: #ef4444;
         }
-        .selected-stock-tag i:hover {
-            color: #b91c1c;
-        }
-        #loading {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.85);
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-    </style>
-</head>
-<body>
+      </style>
+    </head>
+    <body>
 
-    <div id="loading">
-        <div class="spinner-border text-primary mb-2" role="status"></div>
-        <div class="fw-bold text-secondary">晶片核心大數據計算中，請稍候...</div>
-    </div>
+      <nav class="navbar navbar-expand-lg navbar-dark sticky-top">
+        <div class="container-fluid">
+          <a class="navbar-brand" href="#"><i class="bi bi-cpu-fill me-2"></i>ETF 籌碼大數據監控面板</a>
+        </div>
+      </nav>
 
-    <ul class="nav nav-tabs" id="mainTabs" role="tablist">
-        <li class="nav-item">
-            <button class="nav-link active" id="tab1" onclick="switchTab('content1', 'tab1')"><i class="bi bi-pie-chart me-2"></i>單檔 ETF 籌碼分析</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link" id="tab2" onclick="switchTab('content2', 'tab2')"><i class="bi bi-search me-2"></i>個股籌碼分佈追蹤</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link" id="tab3" onclick="switchTab('content3', 'tab3')"><i class="bi bi-shuffle me-2"></i>多檔 ETF 交叉權重矩陣</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link" id="tab4" onclick="switchTab('content4', 'tab4')"><i class="bi bi-activity me-2"></i>全市場成分股異動排行</button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link" id="tab5" onclick="switchTab('content5', 'tab5')"><i class="bi bi-cpu-fill me-2 text-danger"></i>ETF 智能組合篩選</button>
-        </li>
-    </ul>
+      <div id="loading" class="loading-overlay">
+        <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+      </div>
 
-    <div id="content1" class="custom-tab-content active">
-        <div class="row g-3">
-            <div class="col-md-3">
-                <div class="card p-2 shadow-sm bg-light mb-2">
-                    <div class="input-group input-group-sm">
-                        <span class="input-group-text bg-white border-end-0"><i class="bi bi-filter"></i></span>
-                        <input type="text" id="etfSearchInput" class="form-control border-start-0" placeholder="快速過濾 ETF 代號/名稱..." onkeyup="filterEtfList()">
-                    </div>
+      <div class="container-fluid py-4 px-md-5">
+        
+        <ul class="nav nav-tabs mb-4" id="mainTabs">
+          <li class="nav-item">
+            <button class="nav-link active" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-b" onclick="switchTab('content-b', 'tab-b')"><i class="bi bi-share-fill me-2"></i>個股籌碼分佈</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-f" onclick="switchTab('content-f', 'tab-f')"><i class="bi bi-ui-checks-grid me-2 text-primary"></i>ETF 智能組合篩選</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-c" onclick="switchTab('content-c', 'tab-c')"><i class="bi bi-globe me-2"></i>全市場異動總覽</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-d" onclick="switchTab('content-d', 'tab-d')"><i class="bi bi-fire me-2 text-danger"></i>市場熱度排行</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-e" onclick="switchTab('content-e', 'tab-e')"><i class="bi bi-arrow-left-right me-2"></i>ETF 交叉比較</button>
+          </li>
+        </ul>
+
+        <div id="tabsContent">
+          
+          <div class="custom-tab-content active" id="content-a">
+            <div class="row g-4">
+              
+              <div class="col-lg-3">
+                <div class="card p-3 sticky-top" style="top: 80px; z-index: 10;">
+                  <label class="form-label fw-bold text-secondary mb-3"><i class="bi bi-list-ul me-1"></i>請選擇 ETF 代號</label>
+                  <input type="text" id="etfSearchInput" class="form-control mb-3" placeholder="輸入關鍵字篩選..." onkeyup="filterEtfList()">
+                  <div id="etfButtonList" class="list-group etf-list-group">
+                    <div class="text-muted text-center py-3">載入中...</div>
+                  </div>
                 </div>
-                <div class="list-group etf-sidebar shadow-sm" id="etfButtonList"></div>
-            </div>
-            
-            <div class="col-md-9">
-                <div id="etfTitleContainer" class="mb-3" style="display:none;">
-                    <div class="d-flex align-items-center gap-2">
-                        <h2 class="mb-0 text-primary fw-800" id="txtEtfCode"></h2>
-                        <h3 class="mb-0 text-secondary fw-600" id="txtEtfName"></h3>
-                        <span class="badge bg-dark ms-auto" id="txtUpdateDate"></span>
-                    </div>
-                </div>
+              </div>
 
-                <div class="row g-2 mb-3 shadow-sm" id="metaContainer" style="display:none;">
-                    <div class="col-6 col-md-3">
-                        <div class="meta-box">
-                            <h6>即時市價</h6>
-                            <p class="text-primary font-monospace" id="metaMarketPrice">-</p>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="meta-box">
-                            <h6>即時漲跌</h6>
-                            <p class="font-monospace" id="metaChange">-</p>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="meta-box">
-                            <h6>即時折溢價</h6>
-                            <p class="text-warning font-monospace" id="metaPremium">-</p>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-3">
-                        <div class="meta-box">
-                            <h6>當日前十大成交量</h6>
-                            <p class="text-success font-monospace" id="metaVolume">-</p>
-                        </div>
-                    </div>
-                    <div class="col-12 mt-2">
-                        <div class="p-2 bg-light rounded text-muted small d-flex justify-content-between">
-                            <span>最新公告資產規模：<b class="text-dark font-monospace" id="metaSize">-</b></span>
-                            <span id="compareDateBadge" class="badge bg-secondary"></span>
-                        </div>
-                    </div>
+              <div class="col-lg-9">
+                <div id="etfTitleContainer" class="etf-title-display" style="display: none;">
+                  <i class="bi bi-bookmark-star-fill me-2 text-warning"></i>
+                  <span id="txtEtfCode"></span>&nbsp;&nbsp;<span id="txtEtfName" class="text-dark"></span>
+                  <span id="txtUpdateDate" class="update-date-text"></span>
                 </div>
 
-                <div class="card p-3 mb-3 bg-light border">
-                    <div class="row g-2 align-items-center">
-                        <div class="col-md-4">
-                            <label class="form-label small fw-bold text-secondary mb-1">對比區間選擇</label>
-                            <select id="rangeType" class="form-select form-select-sm" onchange="toggleCustomDates(); refreshCurrentEtf();">
-                                <option value="1">與前一日比較 (日增減)</option>
-                                <option value="2">與前二日比較</option>
-                                <option value="4">與前一週比較 (週變動)</option>
-                                <option value="20">與前一月比較 (月變動)</option>
-                                <option value="custom">自訂特定比對日期</option>
-                            </select>
-                        </div>
-                        <div class="col-md-8" id="customDateGroup" style="display:none;">
-                            <div class="row g-2">
-                                <div class="col-6">
-                                    <label class="form-label small fw-bold text-secondary mb-1">比較基準日 (舊)</label>
-                                    <input type="date" id="startDate" class="form-control form-control-sm" onchange="refreshCurrentEtf()">
-                                </div>
-                                <div class="col-6">
-                                    <label class="form-label small fw-bold text-secondary mb-1">目標截止日 (新)</label>
-                                    <input type="date" id="endDate" class="form-control form-control-sm" readonly>
-                                </div>
-                            </div>
-                        </div>
+                <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #3182ce;">
+                      <div class="meta-label">市價</div>
+                      <div class="meta-value" id="metaMarketPrice">-</div>
                     </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #e53e3e;">
+                      <div class="meta-label">漲跌</div>
+                      <div class="meta-value" id="metaChange">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #319795;">
+                      <div class="meta-label">折溢價</div>
+                      <div class="meta-value" id="metaPremium">-%</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #805ad5;">
+                      <div class="meta-label">規模</div>
+                      <div class="meta-value" id="metaSize">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #dd6b20;">
+                      <div class="meta-label">成交量</div>
+                      <div class="meta-value" id="metaVolume">-</div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="row g-3">
-                    <div class="col-lg-6">
-                        <div class="main-card p-3">
-                            <h5 class="fw-bold mb-2 text-danger"><i class="bi bi-lightning-charge me-2"></i>區間成分股增減股數變動排行</h5>
-                            <div class="p-2 mb-2 rounded bg-light text-muted small" id="dateDisplayInfo"></div>
-                            <div class="table-container" style="max-height:450px;">
-                                <table class="table table-sm table-hover align-middle mb-0">
-                                    <thead>
-                                        <tr>
-                                            <th>成分股</th>
-                                            <th>性質</th>
-                                            <th class="text-end">增減股數變動</th>
-                                            <th class="px-4">連續波段趨勢</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="changeTableBody"></tbody>
-                                </table>
-                            </div>
-                        </div>
+                  <div class="col-lg-7">
+                    <div class="card">
+                      <div class="card-header text-primary"><i class="bi bi-list-stars me-2"></i>最新成分股持股明細</div>
+                      <div class="table-responsive" style="max-height: 450px;">
+                        <table class="table table-hover align-middle">
+                          <thead>
+                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th class="text-end">最新持股(股)</th></tr>
+                          </thead>
+                          <tbody id="stockTableBody"></tbody>
+                        </table>
+                      </div>
                     </div>
-                    
-                    <div class="col-lg-6">
-                        <div class="main-card p-3">
-                            <h5 class="fw-bold mb-3 text-dark"><i class="bi bi-list-check me-2"></i>最新完整成分股明細 (含非股票資產)</h5>
-                            
-                            <ul class="nav nav-pills mb-2" id="pills-tab" role="tablist">
-                              <li class="nav-item" role="presentation">
-                                <button class="nav-link active py-1 px-3 small" id="pills-stocks-tab" data-bs-toggle="pill" data-bs-target="#pills-stocks" type="button" role="tab">上市櫃股票個股</button>
-                              </li>
-                              <li class="nav-item" role="presentation">
-                                <button class="nav-link py-1 px-3 small" id="pills-assets-tab" data-bs-toggle="pill" data-bs-target="#pills-assets" type="button" role="tab">現金、指標與其餘資產</button>
-                              </li>
-                            </ul>
-                            
-                            <div class="tab-content" id="pills-tabContent">
-                              <div class="tab-pane fade show active" id="pills-stocks" role="tabpanel">
-                                <div class="table-container" style="max-height:380px;">
-                                    <table class="table table-sm table-hover align-middle mb-0">
-                                        <thead>
-                                            <tr>
-                                                <th>代號</th>
-                                                <th>名稱</th>
-                                                <th class="text-end">最新權重</th>
-                                                <th class="text-end">最新持有股數</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="stockTableBody"></tbody>
-                                    </table>
-                                </div>
-                              </div>
-                              <div class="tab-pane fade" id="pills-assets" role="tabpanel">
-                                <div class="table-container" style="max-height:380px;">
-                                    <table class="table table-sm table-hover align-middle mb-0">
-                                        <thead>
-                                            <tr>
-                                                <th>資產項目</th>
-                                                <th>描述</th>
-                                                <th class="text-end">權重</th>
-                                                <th class="text-end">帳面數量/金額</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="assetTableBody"></tbody>
-                                    </table>
-                                </div>
-                              </div>
-                            </div>
-                        </div>
+                  </div>
+                  
+                  <div class="col-lg-5">
+                    <div class="card">
+                      <div class="card-header text-secondary"><i class="bi bi-cash-coin me-2"></i>非股票資產項目</div>
+                      <div class="table-responsive" style="max-height: 450px;">
+                        <table class="table table-hover align-middle">
+                          <thead>
+                            <tr><th>資產代號</th><th>資產項目</th><th class="text-end">權重</th><th class="text-end">資產價值(股)</th></tr>
+                          </thead>
+                          <tbody id="assetTableBody"></tbody>
+                        </table>
+                      </div>
                     </div>
+                  </div>
                 </div>
 
+                <div class="card p-3 mb-4 bg-light border">
+                  <div class="row align-items-center g-3">
+                    <div class="col-md-4">
+                      <label class="form-label fw-bold text-dark"><i class="bi bi-calendar-range me-1"></i>籌碼比較天數 / 範圍</label>
+                      <select id="rangeType" class="form-select" onchange="toggleCustomDates()">
+                        <option value="1">與前 1 筆紀錄比較 (日變動)</option>
+                        <option value="5">與前 5 筆紀錄比較 (週變動)</option>
+                        <option value="10">與前 10 筆紀錄比較</option>
+                        <option value="custom">自訂特定兩日期區間</option>
+                      </select>
+                    </div>
+                    <div class="col-md-5" id="customDateGroup" style="display: none;">
+                      <div class="row">
+                        <div class="col-6">
+                          <label class="form-label fw-bold text-secondary">舊日期 (YYYY-MM-DD)</label>
+                          <input type="text" id="startDate" class="form-control" placeholder="YYYY-MM-DD">
+                        </div>
+                        <div class="col-6">
+                          <label class="form-label fw-bold text-secondary">新日期 (YYYY-MM-DD)</label>
+                          <input type="text" id="endDate" class="form-control" placeholder="YYYY-MM-DD">
+                        </div>
+                      </div>
+                    </div>
+                    <div class="col-md-3 pt-4">
+                      <button class="btn btn-outline-dark w-100" onclick="refreshCurrentEtf()"><i class="bi bi-calculator me-1"></i>重新計算籌碼</button>
+                    </div>
+                  </div>
+                  <div class="mt-2 text-muted small px-1" id="dateDisplayInfo"></div>
+                </div>
+
+                <div class="card">
+                  <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-lightning-charge-fill me-2 text-warning"></i>動態籌碼異動計算與連續狀態追蹤</span>
+                    <span class="badge bg-secondary" id="compareDateBadge"></span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-striped table-hover align-middle">
+                      <thead>
+                        <tr>
+                          <th>成分股</th>
+                          <th>異動性質</th>
+                          <th class="text-end">區間增減股數</th>
+                          <th class="px-4">核心歷史連續買賣狀態</th>
+                        </tr>
+                      </thead>
+                      <tbody id="changeTableBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
             </div>
-        </div>
-    </div>
+          </div>
 
-    <div id="content2" class="custom-tab-content">
-        <div class="main-card p-4">
-            <h4 class="fw-bold text-dark mb-3"><i class="bi bi-building me-2 text-primary"></i>全市場單一個股之 ETF 籌碼滲透率反查</h4>
-            <div class="row g-3 align-items-end mb-4 bg-light p-3 rounded border">
-                <div class="col-md-5 position-relative">
-                    <label class="form-label small fw-bold">請輸入臺灣上市櫃股票代號或名稱</label>
-                    <input type="text" id="stockInput" class="form-control" placeholder="例如: 2330 或 台積電" onkeyup="searchStockSuggestions(this.value, 'stockSuggestions', 'stockInput', false)">
-                    <div id="stockSuggestions" class="suggestion-box"></div>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label small fw-bold">統計時間跨度</label>
-                    <select id="stockRangeType" class="form-select">
-                        <option value="1">對比前一日 (日變動)</option>
-                        <option value="4">對比一週前 (週變動)</option>
-                        <option value="20">對比一月前 (月變動)</option>
-                    </select>
+          <div class="custom-tab-content" id="content-b">
+            <div class="card p-3 mb-4" style="position: relative;">
+              <div class="row align-items-center g-3">
+                <div class="col-md-4" style="position: relative;">
+                  <label class="form-label fw-bold text-secondary">請輸入個股代號 或 名稱 (支援模糊關鍵字查詢)</label>
+                  <input type="text" id="stockInput" class="form-control form-control-lg" placeholder="例如: 聯 或 2330" onkeyup="searchStockSuggestions(this.value, 'stockSuggestions', 'stockInput')">
+                  <div id="stockSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-md-3">
-                    <button class="btn btn-primary w-100 fw-bold" onclick="searchStockDistribution()"><i class="bi bi-search me-2"></i>啟動大數據反查分析</button>
+                  <label class="form-label fw-bold text-secondary">比較天數 / 範圍</label>
+                  <select id="stockRangeType" class="form-select form-select-lg">
+                    <option value="1">日變動 (與前 1 筆比較)</option>
+                    <option value="5">週變動 (與前 5 筆比較)</option>
+                    <option value="10">與前 10 筆比較</option>
+                  </select>
                 </div>
+                <div class="col-md-3 pt-4">
+                  <button class="btn btn-success btn-lg w-100" onclick="searchStockDistribution()"><i class="bi bi-search me-1"></i>查詢籌碼明細</button>
+                </div>
+              </div>
             </div>
 
-            <div id="stockTrendCard" class="card p-3 mb-3 bg-gradient text-dark border-0 shadow-sm" style="display:none; background: linear-gradient(135deg, #e0e7ff 0%, #f1f5f9 100%);">
-                <div class="row text-center align-items-center">
-                    <div class="col-md-4 border-end">
-                        <small class="text-secondary fw-bold">當前分析個股目標</small>
-                        <h3 class="fw-800 text-primary mb-0 mt-1" id="trendStockHeader">-</h3>
-                    </div>
-                    <div class="col-md-3 border-end">
-                        <small class="text-secondary fw-bold">鎖定佈局之 ETF 總數</small>
-                        <h4 class="fw-bold text-dark mb-0 mt-1" id="trendStockCount">0 檔</h4>
-                    </div>
-                    <div class="col-md-2 border-end">
-                        <small class="text-secondary fw-bold">區間籌碼增減狀態</small>
-                        <div class="mt-1" id="trendStockStatus">-</div>
-                    </div>
-                    <div class="col-md-3">
-                        <small class="text-secondary fw-bold">全體 ETF 總持股股數淨增減</small>
-                        <h4 class="mb-0 mt-1" id="trendStockTotalVol">0 股</h4>
-                    </div>
+            <div id="stockTrendCard" class="card mb-4" style="display: none; border-left: 5px solid #f97316;">
+              <div class="card-body py-3 px-4">
+                <div class="row align-items-center">
+                  <div class="col-md-3">
+                    <div class="text-muted small mb-1"><i class="bi bi-hash"></i> 查詢標的</div>
+                    <h3 class="fw-bold mb-0" id="trendStockHeader">-</h3>
+                  </div>
+                  <div class="col-md-3">
+                    <div class="text-muted small mb-1"><i class="bi bi-speedometer2"></i> 跨市場加減碼趨勢</div>
+                    <h4 class="fw-bold mb-0" id="trendStockStatus">-</h4>
+                  </div>
+                  <div class="col-md-3">
+                    <div class="text-muted small mb-1"><i class="bi bi-diagram-3"></i> 涉及 ETF 檔數</div>
+                    <h4 class="fw-bold mb-0 text-dark" id="trendStockCount">-</h4>
+                  </div>
+                  <div class="col-md-3 text-md-end">
+                    <div class="text-muted small mb-1">區間跨市場總變動股數</div>
+                    <h3 class="fw-bold font-monospace mb-0" id="trendStockTotalVol">-</h3>
+                  </div>
                 </div>
-                <div class="text-end mt-2"><span class="badge bg-secondary text-white" id="stockRangeBadge"></span></div>
+              </div>
             </div>
 
-            <div class="row g-3">
-                <div class="col-md-6" id="stockResultCard" style="display:none;">
-                    <div class="card p-3 shadow-sm border">
-                        <h6 class="fw-bold text-danger mb-3"><i class="bi bi-graph-up-arrow me-2"></i>1. 期間各 ETF 增減該股股數明細排行</h6>
-                        <div class="table-container">
-                            <table class="table table-hover table-sm align-middle mb-0">
-                                <thead>
-                                    <tr><th>ETF 機構代碼名稱</th><th class="text-end">經理人買賣超增減股數</th></tr>
-                                </thead>
-                                <tbody id="stockDistBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
+            <div class="row g-4">
+              <div class="col-lg-7">
+                <div id="stockResultCard" class="card" style="display: none;">
+                  <div class="card-header bg-success text-white fw-bold d-flex justify-content-between align-items-center">
+                    <span id="stockResultTitle"><i class="bi bi-arrow-left-right me-2"></i>各 ETF 區間增減股數明細</span>
+                    <span class="badge bg-light text-success font-monospace" id="stockRangeBadge"></span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                      <thead>
+                        <tr><th>變動 ETF</th><th class="text-end">增減股數</th></tr>
+                      </thead>
+                      <tbody id="stockDistBody"></tbody>
+                    </table>
+                  </div>
                 </div>
-                <div class="col-md-6" id="stockWeightCard" style="display:none;">
-                    <div class="card p-3 shadow-sm border">
-                        <h6 class="fw-bold text-dark mb-3"><i class="bi bi-pie-chart-fill me-2 text-secondary"></i>2. 最新各 ETF 對該股之權重佔比與庫存明細</h6>
-                        <div class="table-container">
-                            <table class="table table-hover table-sm align-middle mb-0">
-                                <thead>
-                                    <tr><th>ETF 機構代碼名稱</th><th class="text-end">成分股佔比權重</th><th class="text-end">目前庫存總股數</th></tr>
-                                </thead>
-                                <tbody id="stockDistBody2"></tbody>
-                            </table>
-                        </div>
-                    </div>
+              </div>
+              <div class="col-lg-5">
+                <div id="stockWeightCard" class="card" style="display: none;">
+                  <div class="card-header bg-dark text-white fw-bold"><i class="bi bi-pie-chart me-2"></i>最新持有該股之 ETF 權重占比</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                      <thead>
+                        <tr><th>ETF</th><th class="text-end">持股權重占比</th><th class="text-end">持有股數</th></tr>
+                      </thead>
+                      <tbody id="stockDistBody2"></tbody>
+                    </table>
+                  </div>
                 </div>
+              </div>
             </div>
-        </div>
-    </div>
+          </div>
 
-    <div id="content3" class="custom-tab-content">
-        <div class="main-card p-4">
-            <h4 class="fw-bold text-dark mb-3"><i class="bi bi-grid-3x3-gap me-2 text-primary"></i>全市場 ETF 成分股成分交叉持股權重矩陣</h4>
-            <p class="text-muted small">勾選您想要交叉對比的多檔 ETF 系統將自動交叉比對最新成分股，抓出共同重疊權重核心：</p>
-            
-            <div class="card p-3 bg-light mb-3 border">
-                <div id="compareEtfCheckboxes" class="mb-3"></div>
-                <button class="btn btn-success fw-bold px-4" onclick="generateComparison()"><i class="bi bi-lightning me-2"></i>一鍵產生交叉分析矩陣</button>
+          <div class="custom-tab-content" id="content-f">
+            <div class="card p-4 mb-4">
+              <h5 class="fw-bold text-primary mb-3"><i class="bi bi-ui-checks-grid me-2"></i>依多檔成分股公司 ➔ 逆向精準篩選適合的 ETF</h5>
+              <p class="text-muted small">請輸入您想要投資的核心公司（可連續新增多檔全球股票代號與名稱），系統將即時為您篩選出「同時具備」這些公司的全球/台股精選 ETF 陣容。</p>
+              
+              <div class="row align-items-center g-3" style="position: relative;">
+                <div class="col-md-5" style="position: relative;">
+                  <label class="form-label fw-bold text-secondary">請輸入全球/台股個股名稱或代號（支援模糊搜尋）</label>
+                  <input type="text" id="matcherInput" class="form-control" placeholder="例如: 台積電、AAPL、NVDA、鴻海..." onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
+                  <div id="matcherSuggestions" class="suggestion-box" style="display: none;"></div>
+                </div>
+                <div class="col-12 mt-3">
+                  <div class="fw-bold text-secondary mb-2">目前已選取的全球投資目標公司：</div>
+                  <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded min-height" style="min-height: 58px;">
+                    <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選</span>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div class="table-responsive shadow-sm border rounded" style="max-height: 600px;">
-                <table class="table table-sm table-bordered table-hover align-middle mb-0 bg-white" style="font-size:0.9rem;">
-                    <thead id="compareTableHeader"></thead>
-                    <tbody id="compareTableBody"><tr><td class="text-center text-muted py-4">請先勾選上方 ETF 並點選產生分析矩陣。</td></tr></tbody>
+            <div class="card">
+              <div class="card-header bg-primary text-white fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-shield-check me-2"></i>完美符合複合條件之 ETF 篩選結果清單</span>
+                <span class="badge bg-light text-primary fw-bold" id="matchedCountBadge">共 0 檔符合</span>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-hover align-middle table-striped">
+                  <thead>
+                    <tr id="matcherTableHeader">
+                      <th>ETF 代號</th>
+                      <th>ETF 名稱</th>
+                      <th>符合之核心成分股、權重與持股數明細</th>
+                    </tr>
+                  </thead>
+                  <tbody id="matcherTableBody">
+                    <tr><td colspan="3" class="text-center text-muted py-4">請先在上方新增目標公司，系統將自動進行大數據分析。</td></tr>
+                  </tbody>
                 </table>
+              </div>
             </div>
-        </div>
-    </div>
+          </div>
 
-    <div id="content4" class="custom-tab-content">
-        <div class="main-card p-4">
-            <h4 class="fw-bold text-dark mb-3"><i class="bi bi-globe me-2 text-primary"></i>跨市場大數據：全市場 ETF 成分股籌碼調倉排行榜</h4>
-            
-            <div class="card p-3 bg-light mb-4 border">
-                <div class="row g-3 align-items-end">
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">調倉計算時間跨度</label>
-                        <select id="globalRangeType" class="form-select" onchange="toggleGlobalChanges()">
-                            <option value="1">對比前一日 (一日調倉追蹤)</option>
-                            <option value="4">對比一週前 (一週調倉追蹤)</option>
-                            <option value="20">對比一月前 (一月長線調倉)</option>
-                            <option value="custom">自訂比對區間</option>
-                        </select>
-                    </div>
-                    <div class="col-md-5" id="globalCustomDateGroup" style="display:none;">
-                        <label class="form-label small fw-bold">請選擇自訂比較基準日</label>
-                        <input type="date" id="globalStartDate" class="form-control">
-                    </div>
-                    <div class="col-md-3">
-                        <button class="btn btn-primary w-100 fw-bold" onclick="loadGlobalChanges(); loadMarketHeat();"><i class="bi bi-cpu me-2"></i>執行跨市場交叉排行計算</button>
-                    </div>
+          <div class="custom-tab-content" id="content-c">
+            <div class="card p-3 mb-4 bg-light">
+              <div class="row align-items-center g-3">
+                <div class="col-md-4">
+                  <label class="form-label fw-bold text-secondary">全市場異動比較範圍</label>
+                  <select id="globalRangeType" class="form-select" onchange="toggleGlobalChanges()">
+                    <option value="1">日變動</option>
+                    <option value="5">週變動</option>
+                    <option value="10">月變動 (10筆)</option>
+                    <option value="custom">自訂區間</option>
+                  </select>
                 </div>
+                <div class="col-md-5" id="globalCustomDateGroup" style="display: none;">
+                  <div class="row">
+                    <div class="col-6"><input type="text" id="globalStartDate" class="form-control" placeholder="舊日期 YYYY-MM-DD"></div>
+                    <div class="col-6"><input type="text" id="globalEndDate" class="form-control" placeholder="新日期 YYYY-MM-DD"></div>
+                  </div>
+                </div>
+                <div class="col-md-3 pt-2"><button class="btn btn-dark w-100 btn-lg" onclick="loadGlobalChanges()"><i class="bi bi-globe2 me-1"></i>生成異動總覽</button></div>
+              </div>
             </div>
-
-            <h5 class="fw-bold text-primary mb-3 text-center" id="globalTitle"></h5>
-
-            <div class="row g-3 mb-4">
-                <div class="col-md-6">
-                    <div class="card p-3 border shadow-sm" style="border-top:4px solid #dc2626 !important;">
-                        <h6 class="fw-bold text-danger mb-3" id="heatBuyTitle"><i class="bi bi-graph-up me-2"></i>跨市場大加總：淨買超前 10 大個股</h6>
-                        <table class="table table-sm table-hover mb-0 align-middle">
-                            <thead><tr><th>名次</th><th>代號</th><th>個股名稱</th><th class="text-end">全體 ETF 淨加碼股數</th></tr></thead>
-                            <tbody id="heatBuyTableBody"></tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="card p-3 border shadow-sm" style="border-top:4px solid #0f766e !important;">
-                        <h6 class="fw-bold text-teal mb-3" id="heatSellTitle" style="color:#0f766e;"><i class="bi bi-graph-down me-2"></i>跨市場大加總：淨賣超前 10 大個股</h6>
-                        <table class="table table-sm table-hover mb-0 align-middle">
-                            <thead><tr><th>名次</th><th>代號</th><th>個股名稱</th><th class="text-end">全體 ETF 淨減持股數</th></tr></thead>
-                            <tbody id="heatSellTableBody"></tbody>
-                        </table>
-                    </div>
-                </div>
+            <div class="card">
+              <div class="card-header bg-danger text-white fw-bold" id="globalTitle">全市場 ETF 成分股異動排行追蹤</div>
+              <div class="table-responsive">
+                <table class="table table-hover table-striped align-middle">
+                  <thead><tr><th>ETF</th><th>成分股</th><th>異動性質</th><th class="text-end">增減股數</th><th>連續買賣狀態</th></tr></thead>
+                  <tbody id="globalTableBody"></tbody>
+                </table>
+              </div>
             </div>
+          </div>
 
-            <div class="card p-3 border">
-                <h5 class="fw-bold text-dark mb-2"><i class="bi bi-database-fill-check me-2 text-secondary"></i>全市場所有調倉軌跡明細流水賬</h5>
-                <div class="table-responsive" style="max-height: 450px;">
-                    <table class="table table-sm table-striped table-hover align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th>ETF 機構</th>
-                                <th>成分標的</th>
-                                <th>異動性質</th>
-                                <th class="text-end">異動股數 (股)</th>
-                                <th>資料庫檢索狀態</th>
-                            </tr>
-                        </thead>
-                        <tbody id="globalTableBody"><tr><td colspan="5" class="text-center text-muted py-3">請點選上方按鈕執行大數據運算。</td></tr></tbody>
+          <div class="custom-tab-content" id="content-d">
+            <div class="card p-3 mb-4 bg-light">
+              <div class="row align-items-center g-3">
+                <div class="col-md-4">
+                  <label class="form-label fw-bold text-secondary">熱度統計比較範圍</label>
+                  <select id="heatRangeType" class="form-select" onchange="toggleHeatCustomDates()">
+                    <option value="1">日變動</option>
+                    <option value="5">週變動</option>
+                    <option value="10">月變動 (10筆)</option>
+                    <option value="custom">自訂區間</option>
+                  </select>
+                </div>
+                <div class="col-md-5" id="heatCustomDateGroup" style="display: none;">
+                  <div class="row">
+                    <div class="col-6"><input type="text" id="heatStartDate" class="form-control" placeholder="舊日期 YYYY-MM-DD"></div>
+                    <div class="col-6"><input type="text" id="heatEndDate" class="form-control" placeholder="新日期 YYYY-MM-DD"></div>
+                  </div>
+                </div>
+                <div class="col-md-3 pt-2"><button class="btn btn-danger w-100 btn-lg" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button></div>
+              </div>
+            </div>
+            <div class="row g-4">
+              <div class="col-lg-6">
+                <div class="card">
+                  <div class="card-header bg-danger text-white fw-bold" id="heatBuyTitle"><i class="bi bi-graph-up me-2"></i>跨市場大加總：淨買超前 10 大個股</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover table-striped align-middle">
+                      <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨加碼(股)</th></tr></thead>
+                      <tbody id="heatBuyTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
                     </table>
+                  </div>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="content5" class="custom-tab-content">
-        <div class="main-card p-4">
-            <h4 class="fw-bold text-dark mb-1"><i class="bi bi-cpu-fill text-danger me-2"></i>成分股反查組合智能篩選器</h4>
-            <p class="text-muted small">輸入並加入您想指定的「多個成分股」，系統將即時比對大數據，篩選出「同時包含這些所有股票項目」的強大 ETF 投資清單。</p>
-            
-            <div class="card p-3 bg-light mb-4 border">
-                <div class="row g-2 align-items-end">
-                    <div class="col-md-9 position-relative">
-                        <label class="form-label small fw-bold text-primary"><i class="bi bi-plus-circle me-1"></i>搜尋並加入您要求的目標成分股公司（可連續加入多檔）</label>
-                        <input type="text" id="matcherInput" class="form-control" placeholder="輸入股票代號或名稱，例如: 2330 或 聯發科" onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
-                        <div id="matcherSuggestions" class="suggestion-box"></div>
-                    </div>
-                    <div class="col-md-3">
-                        <button class="btn btn-outline-danger w-100 fw-bold" onclick="selectedTargetStocks=[]; renderTargetTags(); calculateMatchedEtfs();"><i class="bi bi-trash3 me-2"></i>清空目前全部條件</button>
-                    </div>
-                </div>
-                
-                <div class="mt-3 p-3 bg-white rounded border">
-                    <div class="small fw-bold text-secondary mb-2">當前選定的目標公司條件組合群：</div>
-                    <div id="selectedTargetContainer" class="d-flex flex-wrap align-items-center">
-                        <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card p-3 shadow-sm border">
-                <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2">
-                    <h5 class="fw-bold text-dark mb-0"><i class="bi bi-trophy-fill text-warning me-2"></i>符合條件之 ETF 篩選搜尋分析結果</h5>
-                    <span class="badge bg-primary px-3 py-2" id="matchedCountBadge" style="font-size:0.9rem;">共 0 檔符合</span>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th style="width: 15%;">ETF 代號</th>
-                                <th style="width: 25%;">ETF 完整名稱</th>
-                                <th style="width: 60%;">目標成分股在該 ETF 內之持股佔比與權重明細</th>
-                            </tr>
-                        </thead>
-                        <tbody id="matcherTableBody">
-                            <tr>
-                                <td colspan="3" class="text-center text-muted py-4">請先在上方新增目標公司，系統將自動進行大數據分析。</td>
-                            </tr>
-                        </tbody>
+              </div>
+              <div class="col-lg-6">
+                <div class="card">
+                  <div class="card-header bg-success text-white fw-bold" id="heatSellTitle"><i class="bi bi-graph-down me-2"></i>跨市場大加總：淨賣超前 10 大個股</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover table-striped align-middle">
+                      <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
                     </table>
+                  </div>
                 </div>
+              </div>
             </div>
-        </div>
-    </div>
+          </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
+          <div class="custom-tab-content" id="content-e">
+            <div class="card p-3 mb-4 bg-light">
+              <div class="row align-items-center g-3">
+                <div class="col-12">
+                  <label class="form-label fw-bold text-secondary mb-2"><i class="bi bi-check2-square me-1"></i>請選擇要比較的 ETF（可多選）</label>
+                  <div id="compareEtfCheckboxes" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded" style="max-height: 150px; overflow-y: auto;"></div>
+                </div>
+                <div class="col-md-3 pt-2"><button class="btn btn-primary w-100 btn-lg" onclick="generateComparison()"><i class="bi bi-layout-three-columns me-1"></i>開始交叉比較</button></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header bg-primary text-white fw-bold" id="compareTitle"><i class="bi bi-layout-three-columns me-2"></i>ETF 持股權重交叉比較矩陣</div>
+              <div class="table-responsive">
+                <table class="table table-hover table-striped align-middle">
+                  <thead><tr id="compareTableHeader"><th>股票代號</th><th>股票名稱</th></tr></thead>
+                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <script>
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
@@ -764,9 +858,6 @@ html_template = """
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
         let selectedTargetStocks = []; // 智能組合篩選已選取公司儲存庫
-
-        // 建立一個專屬於從 ETF History 提取出來的合法股票對照表
-        let historyStockMapping = {};
 
         function switchTab(contentId, tabId) {
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
@@ -781,9 +872,6 @@ html_template = """
                 document.getElementById('etfButtonList').innerHTML = '<div class="text-center text-danger py-3">後端無有效資料，請檢查 Google 試算表。</div>';
                 return;
             }
-            
-            // 初始化建立來自 ETF History 的合法股票清單
-            initHistoryStockMapping();
             initDashboard();
             
             // 點擊空白處自動關閉模糊搜尋下拉選單
@@ -834,38 +922,16 @@ html_template = """
             });
         }
 
-        // ==========================================
-        // 修正：修正過濾邏輯，納入 DR 完整排除
-        // ==========================================
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-            // 加上 DR 排除
-            let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨", "RDI", "權證", "DR"];
-            
-            let upperCode = String(code).toUpperCase().trim();
-            let upperName = String(name).toUpperCase().trim();
-
-            if (meta.includes(upperCode) || meta.includes(upperName)) return false;
-            if (cashEx.some(k => upperCode.includes(k) || upperName.includes(k))) return false;
+            let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"];
+            if (meta.includes(code) || meta.includes(name)) return false;
+            if (cashEx.some(k => code.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
             return true;
         }
 
         // ==========================================
-        // 修正：從 ETF History 提取所有合法的成分股作為智能篩選清單
-        // ==========================================
-        function initHistoryStockMapping() {
-            historyStockMapping = {};
-            globalRawData.forEach(item => {
-                let code = String(item.stock).trim();
-                let name = String(item.name).trim();
-                if (code && isNormalStock(code, name)) {
-                    historyStockMapping[code] = name;
-                }
-            });
-        }
-
-        // ==========================================
-        // 修正：將搜尋對照表改為 historyStockMapping 
+        // 新增核心邏輯：支援個股模糊搜尋建議清單
         // ==========================================
         function searchStockSuggestions(value, boxId, inputId, isMultiple = false) {
             let q = value.trim().toLowerCase();
@@ -873,9 +939,8 @@ html_template = """
             if (!q) { box.style.display = 'none'; return; }
 
             let matches = [];
-            // 改從 historyStockMapping 內搜尋，清單來源與過濾條件即一致
-            for (let code in historyStockMapping) {
-                let name = historyStockMapping[code];
+            for (let code in tickerMappingData) {
+                let name = tickerMappingData[code];
                 if (code.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
                     matches.push({ code: code, name: name });
                 }
@@ -904,6 +969,9 @@ html_template = """
             document.getElementById(boxId).style.display = 'none';
         }
 
+        // ==========================================
+        // 新增核心邏輯：ETF 智能組合篩選多標的管理與計算（全面支援全球股市）
+        // ==========================================
         function addTargetStockTag(code, name, boxId, inputId) {
             document.getElementById(inputId).value = "";
             document.getElementById(boxId).style.display = 'none';
@@ -953,6 +1021,7 @@ html_template = """
             etfList.forEach(eCode => {
                 let etfData = globalRawData.filter(d => d.etf === eCode && d.date === latestDate);
                 
+                // 核心驗證：檢查該 ETF 是否包含「所有」使用者選取的標的
                 let allMatched = true;
                 let stockDetailsHtml = '<div class="d-flex flex-column gap-1">';
 
@@ -999,7 +1068,7 @@ html_template = """
         }
 
         // ==========================================
-        // 以下維持原有的其餘分析與歷史渲染邏輯
+        // 以下維持原有邏輯完全不變
         // ==========================================
         function selectEtf(etfName) {
             activeEtf = etfName;
@@ -1366,21 +1435,23 @@ html_template = """
                 return `<tr>${row}</tr>`;
             }).join('');
         }
-    </script>
-</body>
-</html>
-"""
+      </script>
+    </body>
+    </html>
+    """
 
-final_html = html_template.replace(
-    "__DATA_PLACEHOLDER__", json_data
-).replace(
-    "__WANTGOO_PLACEHOLDER__", wantgoo_json
-).replace(
-    "__TWSE_PLACEHOLDER__", twse_json
-).replace(
-    "__TICKER_PLACEHOLDER__", ticker_json
-).replace(
-    "__ETF_NAME_PLACEHOLDER__", etf_name_json
-)
+    final_html = html_template.replace(
+        "__DATA_PLACEHOLDER__", json_data
+    ).replace(
+        "__WANTGOO_PLACEHOLDER__", wantgoo_json
+    ).replace(
+        "__TWSE_PLACEHOLDER__", twse_json
+    ).replace(
+        "__TICKER_PLACEHOLDER__", ticker_json
+    ).replace(
+        "__ETF_NAME_PLACEHOLDER__", etf_name_json
+    )
+    components.html(final_html, height=1600, scrolling=True)
 
-components.html(final_html, height=1400, scrolling=True)
+if __name__ == "__main__":
+    main()
