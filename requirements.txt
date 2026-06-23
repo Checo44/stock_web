@@ -3,3 +3,5 @@ pandas
 numpy
 gspread
 requests
+playwright==1.49.0
+-cmd playwright install chromium
