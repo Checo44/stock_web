@@ -119,46 +119,39 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. 外部即時行情 API 整合模組
 # ==========================================
-def fetch_wantgoo_etf_data():
-    from playwright.sync_api import sync_playwright
-    
-    market_data = {}
-    target_url = "https://www.wantgoo.com/stock/etf/net-value"
-    
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800}
-            )
-            page = context.new_page()
-
-            def handle_response(response):
-                if "nav-and-discount-premium" in response.url:
-                    try:
-                        res_json = response.json()
-                        for item in res_json:
-                            stock_no = str(item.get("stockNo", "")).strip()
-                            if stock_no:
-                                market_data[stock_no] = {
-                                    "price": item.get("price", "-"),
-                                    "change": item.get("changeValue", "-"), 
-                                    "premium": item.get("discountPremiumRate", "-"), 
-                                    "volume": item.get("volume", "-") 
-                                }
-                    except Exception:
-                        pass
-
-            page.on("response", handle_response)
-            page.goto(target_url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(5000)
-            browser.close()
-            
-        return market_data
-    except Exception as e:
-        print(f"玩股網 Playwright 攔截異常: {e}")
-        return {}
+def fetch_pocket_etf_data(etf_list):
+    """
+    爬取 Pocket.tw 數據
+    """
+    results = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        for code in etf_list:
+            try:
+                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                
+                # 抓取規模
+                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
+                size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
+                
+                # 抓取淨值與折溢價 (表格第2行)
+                table = page.locator("table").first
+                rows = table.locator("tr")
+                nav, premium = "-", "-"
+                if rows.count() > 1:
+                    cells = rows.nth(1).locator("td").all_inner_texts()
+                    if len(cells) >= 3:
+                        nav = cells[1].strip()
+                        premium = cells[2].strip()
+                
+                results[code] = {"size": size, "nav": nav, "premium": premium}
+                page.close()
+            except Exception as e:
+                print(f"[{code}] 爬取失敗: {e}")
+        browser.close()
+    return results
 
 # 修正點：補上被呼叫的 fetch_twse_live_data 函式，防止 NameError
 def fetch_twse_live_data(etf_list):
