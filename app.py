@@ -101,7 +101,7 @@ def fetch_ticker_mapping():
 
 @st.cache_data(ttl=300)
 def fetch_etf_name_mapping():
-    """ 抓取 ETF 名稱對照表 (名稱工作表：A欄ETF代號 -> B欄ETF名稱) """
+    """ 採用指定修正邏輯：精確抓取「名稱」工作表建立 ETF 代號與名稱對照 """
     if not sh: return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_ETF_NAME)
@@ -165,7 +165,6 @@ def process_and_standardize(raw_data, ticker_map=None):
                 rename_dict[alias] = standard
                 break
                 
-    # 在對照更名前，先保留原始的成分股名稱欄位名稱，供找不到代號時退回使用
     orig_name_col = None
     for alias in alias_map["name"]:
         if alias in df.columns:
@@ -189,11 +188,9 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 💡 修正 1：若個股無對應代號，則不須清洗、照舊處理，不清空
+    # 若個股無對應代號，則不須清洗、照舊處理，不清空
     if ticker_map:
-        # 先以對照表轉換，若找不到則映射為 None / NaN
         mapped_series = df['stock'].map(ticker_map)
-        # 如果對照表內找不到，則填補原本原始資料中的成分股名稱欄位 (若欄位存在) 或者是更名後的 'name' 欄位
         backup_col = orig_name_col if (orig_name_col and orig_name_col in df.columns) else 'name'
         df['name'] = mapped_series.fillna(df[backup_col].astype(str).str.strip())
     else:
@@ -744,7 +741,7 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="compareTableBody">
-                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較’鈕</td></tr>
+                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr>
                   </tbody>
                 </table>
               </div>
