@@ -119,30 +119,6 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. 外部即時行情 API 整合模組
 # ==========================================
-def fetch_wantgoo_etf_data():
-    api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.wantgoo.com/stock/etf/net-value"
-    }
-    try:
-        res = requests.get(api_url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            market_data = {}
-            for item in res.json():
-                stock_no = str(item.get("stockNo", "")).strip()
-                if stock_no:
-                    market_data[stock_no] = {
-                        "price": item.get("price", "-"),
-                        "change": item.get("changeValue", "-"), 
-                        "premium": item.get("discountPremiumRate", "-"), 
-                        "volume": item.get("volume", "-") 
-                    }
-            return market_data
-    except Exception as e:
-        print(f"玩股網爬蟲異常: {e}")
-    return {}
-
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
@@ -256,9 +232,8 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    wantgoo_data = fetch_wantgoo_etf_data()
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
@@ -557,18 +532,6 @@ def main():
                     <div class="meta-card" style="border-left-color: #e53e3e;">
                       <div class="meta-label">漲跌</div>
                       <div class="meta-value" id="metaChange">-</div>
-                    </div>
-                  </div>
-                    <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #319795;">
-                      <div class="meta-label">折溢價</div>
-                      <div class="meta-value" id="metaPremium">-%</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #805ad5;">
-                      <div class="meta-label">規模</div>
-                      <div class="meta-value" id="metaSize">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
@@ -953,7 +916,6 @@ def main():
                     let liveData = wantgooMarketData[etf] || null;
                     if (liveData && liveData.price !== "-") {
                         price = parseFloat(liveData.price).toFixed(2);
-                        // 玩股網如果有提供漲跌幅直接對應，否則預設為減號
                         changePct = liveData.change !== "-" ? parseFloat(liveData.change).toFixed(2) : "-";
                     }
                 }
@@ -994,14 +956,6 @@ def main():
             if(etfList.length > 0) {
                 selectEtf(etfList[0]);
             }
-        }
-
-        function filterEtfList() {
-            let q = document.getElementById('etfSearchInput').value.toLowerCase();
-            document.querySelectorAll('.etf-item-btn').forEach(btn => {
-                let txt = btn.innerText.toLowerCase();
-                btn.style.display = txt.includes(q) ? "" : "none";
-            });
         }
 
         function isNormalStock(code, name) {
@@ -1194,16 +1148,6 @@ def main():
             } else {
                 setMetaFallback();
             }
-
-            let liveData = wantgooMarketData[etfName] || null;
-            if (liveData) {
-                document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
-            } else {
-                document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
-            }
-
-            let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
-            document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
             document.getElementById('metaContainer').style.display = 'flex';
 
