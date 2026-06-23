@@ -32,7 +32,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "代號"
+WORKSHEET_TICKER = "名稱"
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
