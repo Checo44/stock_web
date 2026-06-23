@@ -32,7 +32,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "名稱"  # 🔍 精確指定對照工作表為「名稱」
+WORKSHEET_TICKER = "名稱"  
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -81,7 +81,6 @@ def fetch_raw_sheet_data():
 
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
-    """讀取「名稱」工作表，精確建立 B 欄 (ETF代號) 對應 C 欄 (ETF名稱) 的字典"""
     if not sh:
         return {}, "無法連線至 Google 試算表"
     try:
@@ -91,7 +90,6 @@ def fetch_ticker_mapping():
             return {}, None
         
         ticker_map = {}
-        # 根據需求：B欄為ETF代號(索引1)，C欄為ETF名稱(索引2)
         for row in raw_ticker[1:]:
             if len(row) > 2:
                 code = str(row[1]).strip()  # B欄
@@ -106,7 +104,6 @@ def fetch_ticker_mapping():
 # 3. 玩股網即時大表爬蟲整合模組
 # ==========================================
 def fetch_wantgoo_etf_data():
-    """向玩股網發送請求，獲取全市場 ETF 的最新即時行情數據"""
     api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -258,18 +255,30 @@ def main():
           font-weight: 700;
           color: #1a202c;
         }
+        
+        /* 💡 自訂 Tab 樣式，點擊手勢 */
         .nav-tabs .nav-link {
           border: none;
           color: #4a5568;
           font-weight: 500;
           padding: 0.75rem 1.25rem;
           border-radius: 8px;
+          cursor: pointer;
         }
         .nav-tabs .nav-link.active {
           background-color: #e2e8f0;
           color: #1e3c72;
           font-weight: 700;
         }
+        
+        /* 自訂控制面板分頁顯示隱藏 */
+        .custom-tab-content {
+          display: none;
+        }
+        .custom-tab-content.active {
+          display: block;
+        }
+
         .loading-overlay {
           position: fixed;
           top: 0; left: 0; width: 100%; height: 100%;
@@ -342,27 +351,29 @@ def main():
 
       <div class="container-fluid py-4 px-md-5">
         
-        <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+        <!-- 💡 核心修正：改用全新 onclick 精確控制分頁切換 -->
+        <ul class="nav nav-tabs mb-4" id="mainTabs">
           <li class="nav-item">
-            <button class="nav-link active" id="tab-a" data-bs-toggle="tab" data-bs-target="#content-a" type="button"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
+            <button class="nav-link active" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
           </li>
           <li class="nav-item">
-            <button class="nav-link" id="tab-b" data-bs-toggle="tab" data-bs-target="#content-b" type="button"><i class="bi bi-share-fill me-2"></i>個股籌碼分佈</button>
+            <button class="nav-link" id="tab-b" onclick="switchTab('content-b', 'tab-b')"><i class="bi bi-share-fill me-2"></i>個股籌碼分佈</button>
           </li>
           <li class="nav-item">
-            <button class="nav-link" id="tab-c" data-bs-toggle="tab" data-bs-target="#content-c" type="button"><i class="bi bi-globe me-2"></i>全市場異動總覽</button>
+            <button class="nav-link" id="tab-c" onclick="switchTab('content-c', 'tab-c')"><i class="bi bi-globe me-2"></i>全市場異動總覽</button>
           </li>
           <li class="nav-item">
-            <button class="nav-link" id="tab-d" data-bs-toggle="tab" data-bs-target="#content-d" type="button"><i class="bi bi-fire me-2 text-danger"></i>市場熱度排行</button>
+            <button class="nav-link" id="tab-d" onclick="switchTab('content-d', 'tab-d')"><i class="bi bi-fire me-2 text-danger"></i>市場熱度排行</button>
           </li>
           <li class="nav-item">
-            <button class="nav-link" id="tab-e" data-bs-toggle="tab" data-bs-target="#content-e" type="button"><i class="bi bi-arrow-left-right me-2"></i>ETF 交叉比較</button>
+            <button class="nav-link" id="tab-e" onclick="switchTab('content-e', 'tab-e')"><i class="bi bi-arrow-left-right me-2"></i>ETF 交叉比較</button>
           </li>
         </ul>
 
-        <div class="tab-content" id="tabsContent">
+        <div id="tabsContent">
           
-          <div class="tab-pane fade show active" id="content-a" role="tabpanel">
+          <!-- Tab A -->
+          <div class="custom-tab-content active" id="content-a">
             <div class="row g-4">
               
               <div class="col-lg-3">
@@ -376,7 +387,6 @@ def main():
               </div>
 
               <div class="col-lg-9">
-                
                 <div id="etfTitleContainer" class="etf-title-display" style="display: none;">
                   <i class="bi bi-bookmark-star-fill me-2 text-warning"></i>
                   <span id="txtEtfCode"></span>&nbsp;&nbsp;<span id="txtEtfName" class="text-dark"></span>
@@ -499,7 +509,8 @@ def main():
             </div>
           </div>
 
-          <div class="tab-pane fade" id="content-b" role="tabpanel">
+          <!-- Tab B -->
+          <div class="custom-tab-content" id="content-b">
             <div class="card p-3">
               <div class="row align-items-center g-3">
                 <div class="col-md-6">
@@ -522,7 +533,8 @@ def main():
             </div>
           </div>
 
-          <div class="tab-pane fade" id="content-c" role="tabpanel">
+          <!-- Tab C -->
+          <div class="custom-tab-content" id="content-c">
             <div class="card p-3 mb-4 bg-light">
               <div class="row align-items-center g-3">
                 <div class="col-md-4">
@@ -562,7 +574,8 @@ def main():
             </div>
           </div>
 
-          <div class="tab-pane fade" id="content-d" role="tabpanel">
+          <!-- Tab D -->
+          <div class="custom-tab-content" id="content-d">
             <div class="card p-3 mb-4 bg-light">
               <div class="row align-items-center g-3">
                 <div class="col-md-4">
@@ -616,7 +629,7 @@ def main():
                         <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr>
                       </thead>
                       <tbody id="heatSellTableBody">
-                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析`」載入數據</td></tr>
+                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -625,7 +638,8 @@ def main():
             </div>
           </div>
 
-          <div class="tab-pane fade" id="content-e" role="tabpanel">
+          <!-- Tab E -->
+          <div class="custom-tab-content" id="content-e">
             <div class="card p-3 mb-4 bg-light">
               <div class="row align-items-center g-3">
                 <div class="col-12">
@@ -659,13 +673,22 @@ def main():
         </div>
       </div>
 
-      <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bundle.min.js"></script>
-
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let activeEtf = "";
+
+        // 💡 核心修正：手動純 JS 分頁切換器，擺脫 Bootstrap 控制衝突
+        function switchTab(contentId, tabId) {
+            // 隱藏所有內容、移除所有 Tab 啟動狀態
+            document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-tabs .nav-link').forEach(el => el.classList.remove('active'));
+            
+            // 顯示當前點選的內容與高亮
+            document.getElementById(contentId).classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
 
         document.addEventListener("DOMContentLoaded", function() {
             document.getElementById('loading').style.display = 'none';
@@ -730,7 +753,6 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            // 顯示頂部的股票代號與對照出的 ETF名稱
             let mappedName = tickerMappingData[etfName] || "未知名稱";
             document.getElementById('txtEtfCode').innerText = etfName;
             document.getElementById('txtEtfName').innerText = mappedName;
@@ -815,9 +837,7 @@ def main():
                         let vOld = etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
                         let diff = vNew - vOld;
 
-                        if (diff === 0) {
-                            break;
-                        }
+                        if (diff === 0) break;
 
                         let dayTrend = diff > 0 ? "買" : "賣";
 
@@ -839,10 +859,7 @@ def main():
                 });
             }
 
-            let htmlNew = "";
-            let htmlAdd = "";
-            let htmlSub = "";
-            let htmlDel = "";
+            let htmlNew = ""; let htmlAdd = ""; let htmlSub = ""; let htmlDel = "";
 
             currentStocks.forEach(r => {
                 let oldVol = compRows.find(c => c.stock === r.stock)?.volume || 0;
@@ -850,18 +867,13 @@ def main():
 
                 if (diff !== 0) {
                     let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
-                    
-                    let badge = "";
-                    let dStyle = "";
+                    let badge = ""; let dStyle = "";
                     if (nature === "新增") {
-                        badge = `<span class="badge-nature-new">${nature}</span>`;
-                        dStyle = "color:#ea580c;";
+                        badge = `<span class="badge-nature-new">${nature}</span>`; dStyle = "color:#ea580c;";
                     } else if (nature === "增加") {
-                        badge = `<span class="badge-nature-up">${nature}</span>`;
-                        dStyle = "color:#dc2626;";
+                        badge = `<span class="badge-nature-up">${nature}</span>`; dStyle = "color:#dc2626;";
                     } else {
-                        badge = `<span class="badge-nature-down">${nature}</span>`;
-                        dStyle = "color:#0f766e;";
+                        badge = `<span class="badge-nature-down">${nature}</span>`; dStyle = "color:#0f766e;";
                     }
                     
                     let trendStr = trendMap[r.stock] || "無變動";
@@ -871,10 +883,10 @@ def main():
 
                     let rowHtml = `
                         <tr>
-                            <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
-                            <td>${badge}</td>
-                            <td class="text-end fw-bold font-monospace" style="${dStyle}">${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString()} 股</td>
-                            <td class="px-4">${trendHtml}</td>
+                          <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
+                          <td>${badge}</td>
+                          <td class="text-end fw-bold font-monospace" style="${dStyle}">${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString()} 股</td>
+                          <td class="px-4">${trendHtml}</td>
                         </tr>`;
 
                     if (nature === "新增") htmlNew += rowHtml;
@@ -888,9 +900,7 @@ def main():
                     let isStillExist = currentStocks.some(c => c.stock === r.stock);
                     if (!isStillExist && r.volume > 0) {
                         let badge = `<span class="badge-nature-delete">刪除</span>`;
-                        let dStyle = "color:#4b5563;";
-                        let diff = -r.volume;
-                        
+                        let dStyle = "color:#4b5563;"; let diff = -r.volume;
                         let trendStr = trendMap[r.stock] || "無變動";
                         let trendHtml = `<span class="text-muted">無變動</span>`;
                         if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
@@ -898,17 +908,16 @@ def main():
                         
                         htmlDel += `
                             <tr>
-                                <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
-                                <td>${badge}</td>
-                                <td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(diff).toLocaleString()} 股</td>
-                                <td class="px-4">${trendHtml}</td>
+                              <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
+                              <td>${badge}</td>
+                              <td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(diff).toLocaleString()} 股</td>
+                              <td class="px-4">${trendHtml}</td>
                             </tr>`;
                     }
                 }
             });
 
-            let changeHtml = htmlNew + htmlAdd + htmlSub + htmlDel;
-            document.getElementById('changeTableBody').innerHTML = changeHtml || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
+            document.getElementById('changeTableBody').innerHTML = (htmlNew + htmlAdd + htmlSub + htmlDel) || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
         }
 
         function toggleCustomDates() {
@@ -916,9 +925,7 @@ def main():
             document.getElementById('customDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
         }
 
-        function refreshCurrentEtf() {
-            if(activeEtf) selectEtf(activeEtf);
-        }
+        function refreshCurrentEtf() { if(activeEtf) selectEtf(activeEtf); }
 
         function searchStockDistribution() {
             let target = document.getElementById('stockInput').value.trim();
@@ -934,15 +941,15 @@ def main():
             document.getElementById('stockResultTitle').innerText = `🔍 個股 [${target}] 於全市場 ETF 最新持股分佈明細 (${latestDate})`;
 
             if(matches.length === 0) {
-                body.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">全市場目前無 any ETF 持有此資產。</td></tr>`;
+                body.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">全市場目前無任何 ETF 持有此資產。</td></tr>`;
                 return;
             }
 
             body.innerHTML = matches.sort((a,b)=>b.volume - a.volume).map(r => `
                 <tr>
-                    <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${r.etf}</td>
-                    <td class="text-end fw-bold text-danger">${Number(r.weight).toFixed(2)}%</td>
-                    <td class="text-end text-secondary font-monospace">${Math.round(r.volume).toLocaleString()} 股</td>
+                  <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${r.etf}</td>
+                  <td class="text-end fw-bold text-danger">${Number(r.weight).toFixed(2)}%</td>
+                  <td class="text-end text-secondary font-monospace">${Math.round(r.volume).toLocaleString()} 股</td>
                 </tr>
             `).join('');
         }
@@ -955,18 +962,10 @@ def main():
             let type = document.getElementById('globalRangeType').value;
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
-            let compDate = "";
-
-            if(type === 'custom') {
-                compDate = document.getElementById('globalStartDate').value;
-            } else {
-                compDate = dates[Math.max(0, dates.length - 1 - parseInt(type))];
-            }
+            let compDate = (type === 'custom') ? document.getElementById('globalStartDate').value : dates[Math.max(0, dates.length - 1 - parseInt(type))];
 
             document.getElementById('globalTitle').innerText = `全市場 ETF 成分股異動排行追蹤 [ 區間：${compDate} ➔ ${latestDate} ]`;
-            
-            let body = document.getElementById('globalTableBody');
-            body.innerHTML = "";
+            let body = document.getElementById('globalTableBody'); body.innerHTML = "";
             let anyChange = false;
 
             let etfList = [...new Set(globalRawData.map(d=>d.etf))];
@@ -1031,7 +1030,7 @@ def main():
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
 
-            header = document.getElementById('compareTableHeader');
+            let header = document.getElementById('compareTableHeader');
             header.innerHTML = `<th>股票代號</th><th>股票名稱</th>` + checkedCbs.map(c => `<th class="text-end" style="min-width:120px;">${c} 權重</th>`).join('');
 
             let stockMap = {};
