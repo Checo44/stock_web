@@ -1,10 +1,5 @@
-streamlit>=1.30.0
-pandas>=2.0.0
-numpy>=1.24.0
-gspread>=5.10.0
-google-auth>=2.20.0
-requests>=2.31.0
-beautifulsoup4
-playwright==1.49.0
--cmd playwright install chromium
-
+streamlit
+pandas
+numpy
+gspread
+requests
