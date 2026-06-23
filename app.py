@@ -1,10 +1,17 @@
+import os
+# ==========================================
+# 0. 雲端環境 Playwright 瀏覽器核心自動初始化
+# ==========================================
+# 檢查是否在 Streamlit Cloud 或是缺少瀏覽器，若是則自動執行安裝程序
+if not os.path.exists(os.path.expanduser("~/.cache/ms-playwright")):
+    os.system("playwright install chromium")
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import gspread
 import json
-import os
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -129,7 +136,11 @@ def fetch_pocket_etf_data(etf_list):
         return results
         
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # 加上 chromium 參數限制只用最輕量瀏覽器，且關閉沙盒模式以相容雲端 Linux
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
         for code in etf_list:
             try:
                 url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
@@ -268,7 +279,7 @@ def fetch_backend_data_to_json():
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
-    pocket_data = fetch_pocket_etf_data(all_etfs) # 修正點：替換成原本寫好但沒呼叫到的 Playwright 爬蟲
+    pocket_data = fetch_pocket_etf_data(all_etfs)
     
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False), pocket_data, twse_live_market, ticker_map, etf_name_map
@@ -757,7 +768,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -780,7 +791,7 @@ def main():
               <div class="table-responsive">
                 <table class="table table-hover table-striped align-middle">
                   <thead><tr id="compareTableHeader"><th>股票代號</th><th>股票名稱</th></tr></thead>
-                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較']按鈕</td></tr></tbody>
+                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -791,7 +802,7 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
-        let pocketMarketData = __POCKET_PLACEHOLDER__; // 修正點：配合後端換成 POCKET 變數
+        let pocketMarketData = __POCKET_PLACEHOLDER__; 
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
@@ -906,14 +917,12 @@ def main():
                 setMetaFallback();
             }
 
-            // 修正點：從 Pocket 爬取到的即時數據進行前端渲染與串接
             let liveData = pocketMarketData[etfName] || null;
             if (liveData) {
                 document.getElementById('metaPremium').innerText = liveData.premium || "-%";
                 document.getElementById('metaNavPrice').innerText = liveData.nav || "-";
                 document.getElementById('metaSize').innerText = liveData.size ? liveData.size + " 億" : "-";
             } else {
-                // 如果 Playwright 沒爬到，降級使用試算表內的舊歷史資料
                 document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
                 document.getElementById('metaNavPrice').innerText = (latestRows.find(r => r.stock === "淨值")?.volume || "-");
                 let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
@@ -1237,7 +1246,7 @@ def main():
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
-        "__POCKET_PLACEHOLDER__", pocket_json  # 修正點：替換成對應的 Pocket JSON 變數
+        "__POCKET_PLACEHOLDER__", pocket_json
     ).replace(
         "__TWSE_PLACEHOLDER__", twse_json
     ).replace(
