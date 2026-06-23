@@ -140,64 +140,53 @@ def fetch_etf_name_mapping():
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    精準爬取 Pocket.tw 的折溢價表格數據
+    不使用 Playwright，改用純 requests 抓取口袋證券後端折溢價 API 數據
     """
     results = {}
     if not etf_list:
         return results
-
-    with sync_playwright() as p:
-        # 建議在雲端環境加上 arguments 防止閃退
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-        )
         
-        for code in etf_list:
-            print(f"🔎 正在爬取折溢價數據 [{code}]...")
-            try:
-                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
-                page = browser.new_page()
-                page.goto(url, wait_until="networkidle", timeout=60000)
-                time.sleep(2)  # 等待前端非同步資料渲染
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.pocket.tw/"
+    }
+    
+    for code in etf_list:
+        print(f"🔎 正在抓取折溢價數據 [{code}]...")
+        try:
+            # 口袋證券網頁實際背後呼叫的 API 節點
+            api_url = f"https://www.pocket.tw/api/etf/tw/{code}/discountpremium"
+            res = requests.get(api_url, headers=headers, timeout=10)
+            
+            if res.status_code == 200:
+                data = res.json()
                 
-                # 1. 抓取規模 (維持你原本的定位邏輯)
-                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
-                size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
-                
-                # 2. 【精準表格定位法】鎖定包含「淨值」和「折溢價(%)」的表格
-                target_table = page.locator("table").filter(has_text="淨值").filter(has_text="折溢價(%)").first
-                target_table.wait_for(state="attached", timeout=15000)
-                
-                rows = target_table.locator("tr").all()
-                nav, premium = "-", "-"
-                
-                # 遍歷表格行尋找數據
-                for row in rows:
-                    cells = row.locator("th, td").all_inner_texts()
-                    clean_row = [c.replace('\n', ' ').strip() for c in cells]
+                # 取得今日/最新一筆的折溢價明細表格數據
+                details = data.get("details", [])
+                if details:
+                    latest_row = details[0] # 第一筆通常是最新日期
                     
-                    if len(clean_row) < 4 or not any(clean_row): 
-                        continue
-                        
-                    # 跳過表頭行，抓取資料行 (例如包含日期的那一行 2026/06/23)
-                    if "淨值" in clean_row or "折溢價(%)" in clean_row:
-                        continue
-                    else:
-                        # 依照圖片中的欄位順序：[0]日期, [1]收盤價, [2]淨值, [3]折溢價(%)
-                        nav = clean_row[2]
-                        premium = clean_row[3]
-                        break # 抓到最新的一筆（通常是第一行）就跳出
+                    # 對照圖片欄位：日期, 收盤價, 淨值, 折溢價(%)
+                    nav = str(latest_row.get("nav", "-"))          # 淨值
+                    premium = str(latest_row.get("premium", "-"))  # 折溢價(%)
+                    if premium != "-":
+                        premium = f"{premium}%"
+                else:
+                    nav, premium = "-", "-"
                 
+                # 取得資產規模
+                size = str(data.get("assetSize", "-"))
+                if size != "-":
+                    size = f"{size}億"
+                    
                 results[code] = {"size": size, "nav": nav, "premium": premium}
-                page.close()
-                print(f"✅ [{code}] 爬取成功 -> 淨值: {nav}, 折溢價: {premium}, 規模: {size}")
-                
-            except Exception as e:
-                print(f"⚠️ [{code}] 抓取出錯: {e}")
+                print(f"✅ [{code}] 抓取成功 -> 淨值: {nav}, 折溢價: {premium}, 規模: {size}")
+            else:
                 results[code] = {"size": "-", "nav": "-", "premium": "-"}
-                
-        browser.close()
+        except Exception as e:
+            print(f"⚠️ [{code}] 抓取失敗: {e}")
+            results[code] = {"size": "-", "nav": "-", "premium": "-"}
+            
     return results
 
 def fetch_twse_live_data(etf_list):
