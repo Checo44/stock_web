@@ -1239,7 +1239,11 @@ def main():
     ).replace(
         "__ETF_NAME_PLACEHOLDER__", etf_name_json
     )
-    components.html(html_template.replace("__DATA_PLACEHOLDER__", json_data)..., height=1600, scrolling=True)
+    
+    components.html(final_html, height=1600, scrolling=True)
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
