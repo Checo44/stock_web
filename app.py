@@ -6,7 +6,7 @@ import gspread
 import json
 import os
 import requests
-from bs4 import BeautifulSoup  # 替換掉 playwright
+from playwright.sync_api import sync_playwright
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -118,42 +118,43 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組 (修正：改用 requests 避開 Playwright 環境報錯)
+# 3. 外部即時行情 API 整合模組
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    使用純 requests 抓取 Pocket.tw 的 ETF 最新「淨值」數據
-    避開雲端環境上 Playwright 無法啟動 Chromium 的錯誤
+    爬取 Pocket.tw 數據
     """
     results = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    for code in etf_list:
-        try:
-            url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
-            res = requests.get(url, headers=headers, timeout=15)
-            nav = "-"
-            
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                # 尋找網頁中的第一個 table
-                table = soup.find("table")
-                if table:
-                    rows = table.find_all("tr")
-                    # rows[0] 是表頭，rows[1] 是最新一日的資料
-                    if len(rows) > 1:
-                        cells = [td.get_text().strip() for td in rows[1].find_all("td")]
-                        # 根據表格結構：[0]日期, [1]收盤價, [2]淨值, [3]折溢價%
-                        if len(cells) >= 3:
-                            nav = cells[2]
-            
-            results[code] = {"nav": nav}
-        except Exception as e:
-            print(f"[{code}] 淨值爬取失敗: {e}")
-            results[code] = {"nav": "-"}
-            
+    if not etf_list:
+        return results
+        
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        for code in etf_list:
+            try:
+                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                
+                # 抓取規模
+                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
+                size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
+                
+                # 抓取淨值與折溢價 (表格第2行)
+                table = page.locator("table").first
+                rows = table.locator("tr")
+                nav, premium = "-", "-"
+                if rows.count() > 1:
+                    cells = rows.nth(1).locator("td").all_inner_texts()
+                    if len(cells) >= 3:
+                        nav = cells[1].strip()
+                        premium = cells[2].strip()
+                
+                results[code] = {"size": size, "nav": nav, "premium": premium}
+                page.close()
+            except Exception as e:
+                print(f"[{code}] 爬取失敗: {e}")
+        browser.close()
     return results
 
 def fetch_twse_live_data(etf_list):
@@ -267,12 +268,10 @@ def fetch_backend_data_to_json():
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
-    
-    # 呼叫不需要 Playwright 的全新 Pocket 爬蟲
-    pocket_market_data = fetch_pocket_etf_data(all_etfs)
+    pocket_data = fetch_pocket_etf_data(all_etfs) # 修正點：替換成原本寫好但沒呼叫到的 Playwright 爬蟲
     
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), pocket_market_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), pocket_data, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
@@ -501,9 +500,15 @@ def main():
                     </div>
                   </div>
                   <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #48bb78;">
+                    <div class="meta-card" style="border-left-color: #4ea8de;">
                       <div class="meta-label">淨值</div>
-                      <div class="meta-value" id="metaNav">-</div>
+                      <div class="meta-value" id="metaNavPrice">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #319795;">
+                      <div class="meta-label">折溢價</div>
+                      <div class="meta-value" id="metaPremium">-%</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
@@ -752,7 +757,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析’」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -775,7 +780,7 @@ def main():
               <div class="table-responsive">
                 <table class="table table-hover table-striped align-middle">
                   <thead><tr id="compareTableHeader"><th>股票代號</th><th>股票名稱</th></tr></thead>
-                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr></tbody>
+                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較']按鈕</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -786,7 +791,7 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
-        let pocketMarketData = __POCKET_PLACEHOLDER__; 
+        let pocketMarketData = __POCKET_PLACEHOLDER__; // 修正點：配合後端換成 POCKET 變數
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
@@ -848,7 +853,7 @@ def main():
         }
 
         function isNormalStock(code, name) {
-            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "淨值", "昨收", "UNDEFINED", "NULL", ""];
+            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
             let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"];
             if (meta.includes(code) || meta.includes(name)) return false;
             if (cashEx.some(k => code.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
@@ -901,21 +906,24 @@ def main():
                 setMetaFallback();
             }
 
-            // 讀取最新的一日「淨值」
+            // 修正點：從 Pocket 爬取到的即時數據進行前端渲染與串接
             let liveData = pocketMarketData[etfName] || null;
-            if (liveData && liveData.nav) {
-                document.getElementById('metaNav').innerText = liveData.nav;
+            if (liveData) {
+                document.getElementById('metaPremium').innerText = liveData.premium || "-%";
+                document.getElementById('metaNavPrice').innerText = liveData.nav || "-";
+                document.getElementById('metaSize').innerText = liveData.size ? liveData.size + " 億" : "-";
             } else {
-                document.getElementById('metaNav').innerText = (latestRows.find(r => r.stock === "淨值")?.volume || "-");
+                // 如果 Playwright 沒爬到，降級使用試算表內的舊歷史資料
+                document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
+                document.getElementById('metaNavPrice').innerText = (latestRows.find(r => r.stock === "淨值")?.volume || "-");
+                let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
+                document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
             }
-
-            let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
-            document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
             document.getElementById('metaContainer').style.display = 'flex';
 
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
-            let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價","淨值"].includes(r.stock));
+            let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價", "淨值"].includes(r.stock));
 
             document.getElementById('stockTableBody').innerHTML = stocks.map(r => `
                 <tr>
@@ -1229,7 +1237,7 @@ def main():
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
-        "__POCKET_PLACEHOLDER__", pocket_json
+        "__POCKET_PLACEHOLDER__", pocket_json  # 修正點：替換成對應的 Pocket JSON 變數
     ).replace(
         "__TWSE_PLACEHOLDER__", twse_json
     ).replace(
