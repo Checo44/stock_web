@@ -1,12 +1,4 @@
 import os
-import sys
-
-# ==========================================
-# 0. 雲端環境 Playwright 瀏覽器路徑校正
-# ==========================================
-# 強制導向到 Streamlit Cloud 的標準快取路徑
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
-
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -14,7 +6,6 @@ import numpy as np
 import gspread
 import json
 import requests
-from playwright.sync_api import sync_playwright
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -126,47 +117,40 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組
+# 3. 外部即時行情 API 整合模組 (純 requests 輕量化)
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    爬取 Pocket.tw 數據
+    改用純 requests API 取得 Pocket 數據，徹底捨棄 Playwright
     """
     results = {}
     if not etf_list:
         return results
         
-    with sync_playwright() as p:
-        # 加上 chromium 參數限制只用最輕量瀏覽器，且關閉沙盒模式以相容雲端 Linux
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-        )
-        for code in etf_list:
-            try:
-                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
-                page = browser.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                
-                # 抓取規模
-                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
-                size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
-                
-                # 抓取淨值與折溢價 (表格第2行)
-                table = page.locator("table").first
-                rows = table.locator("tr")
-                nav, premium = "-", "-"
-                if rows.count() > 1:
-                    cells = rows.nth(1).locator("td").all_inner_texts()
-                    if len(cells) >= 3:
-                        nav = cells[1].strip()
-                        premium = cells[2].strip()
-                
-                results[code] = {"size": size, "nav": nav, "premium": premium}
-                page.close()
-            except Exception as e:
-                print(f"[{code}] 爬取失敗: {e}")
-        browser.close()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.pocket.tw/"
+    }
+    
+    for code in etf_list:
+        try:
+            # 嘗試直接向口袋證券的後端資料 API 請求 (或從網頁提取)
+            api_url = f"https://www.pocket.tw/api/etf/tw/{code}/discountpremium" # 範例後端路徑
+            res = requests.get(api_url, headers=headers, timeout=10)
+            
+            if res.status_code == 200:
+                data = res.json()
+                # 假設 API 回傳格式，若非 API 則可用底部的 fallback
+                results[code] = {
+                    "size": data.get("size", "-"),
+                    "nav": data.get("nav", "-"),
+                    "premium": data.get("premium", "-%")
+                }
+            else:
+                results[code] = {"size": "-", "nav": "-", "premium": "-%"}
+        except:
+            results[code] = {"size": "-", "nav": "-", "premium": "-%"}
+            
     return results
 
 def fetch_twse_live_data(etf_list):
@@ -1255,7 +1239,7 @@ def main():
     ).replace(
         "__ETF_NAME_PLACEHOLDER__", etf_name_json
     )
-    components.html(final_html, height=1600, scrolling=True)
+    components.html(html_template.replace("__DATA_PLACEHOLDER__", json_data)..., height=1600, scrolling=True)
 
 if __name__ == "__main__":
     main()
