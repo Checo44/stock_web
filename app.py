@@ -75,9 +75,6 @@ def load_all_sheets_data():
         raw_history = w_history.get_all_records()
         df_hist = pd.DataFrame(raw_history)
         
-        # 【關鍵修正】將讀取到的欄位名稱全部去空格、轉小寫，防止 Google 試算表欄位大小寫或空格不一致導致 KeyError
-        df_hist.columns = df_hist.columns.astype(str).str.strip().str.lower()
-        
         # 2. 讀取代號對照表
         try:
             w_ticker = sh.worksheet(WORKSHEET_TICKER)
@@ -159,13 +156,23 @@ def fetch_wantgoo_etf_live():
 # ==========================================
 df_hist, ticker_map, etf_name_map = load_all_sheets_data()
 
-# 格式清理
-df_hist['etf'] = df_hist['etf'].astype(str).str.strip()
-df_hist['stock'] = df_hist['stock'].astype(str).str.strip()
-df_hist['name'] = df_hist['name'].astype(str).str.strip()
-df_hist['date'] = df_hist['date'].astype(str).str.strip()
-df_hist['weight'] = pd.to_numeric(df_hist['weight'], errors='coerce').fillna(0.0)
-df_hist['volume'] = pd.to_numeric(df_hist['volume'], errors='coerce').fillna(0.0)
+# 清除所有欄位名稱的隱形空白
+df_hist.columns = df_hist.columns.astype(str).str.strip()
+
+# 進行實際中文欄位對照，並建立英文別名供前端 HTML5 大數據面板使用
+if 'ETF代號' in df_hist.columns:
+    df_hist['etf'] = df_hist['ETF代號'].astype(str).str.strip()
+elif 'etf代號' in df_hist.columns:
+    df_hist['etf'] = df_hist['etf代號'].astype(str).str.strip()
+else:
+    st.error("在『ETF History』工作表中找不到『ETF代號』欄位，請確認試算表第一行標頭是否完全符合。")
+    st.stop()
+
+df_hist['stock']  = df_hist['成分股代號'].astype(str).str.strip() if '成分股代號' in df_hist.columns else ""
+df_hist['name']   = df_hist['成分股名稱'].astype(str).str.strip() if '成分股名稱' in df_hist.columns else ""
+df_hist['date']   = df_hist['日期'].astype(str).str.strip() if '日期' in df_hist.columns else ""
+df_hist['weight'] = pd.to_numeric(df_hist['持股權重'], errors='coerce').fillna(0.0) if '持股權重' in df_hist.columns else 0.0
+df_hist['volume'] = pd.to_numeric(df_hist['持有數量'], errors='coerce').fillna(0.0) if '持有數量' in df_hist.columns else 0.0
 
 # 獲取全市場 ETF 清單
 all_etf_codes = sorted(df_hist['etf'].unique().tolist())
