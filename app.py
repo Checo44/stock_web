@@ -117,7 +117,7 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 玩股網即時大表爬蟲整合模組
+# 3. 外部即時行情 API 整合模組 (Python 後端發送，避開前端 CORS 與限制)
 # ==========================================
 def fetch_wantgoo_etf_data():
     api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
@@ -142,6 +142,39 @@ def fetch_wantgoo_etf_data():
     except Exception as e:
         print(f"玩股網爬蟲異常: {e}")
     return {}
+
+# 核心修正：動態根據傳入的 ETF 列表，批次向證交所請求所有對應代號的即時盤態
+def fetch_twse_live_data(etf_list):
+    if not etf_list:
+        return {}
+    
+    twse_market_data = {}
+    # 將所有 ETF 拼接到參數中，例如：tse_0050.tw|tse_0056.tw|tse_00878.tw
+    ch_param = "|".join([f"tse_{code}.tw" for code in etf_list])
+    api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://mis.twse.com.tw/"
+    }
+    try:
+        res = requests.get(api_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            res_json = res.json()
+            msg_array = res_json.get("msgArray", [])
+            for msg in msg_array:
+                # 證交所返回的代號欄位為 "c" (例如 "0050")
+                ex_ch = msg.get("c", "").strip() 
+                if ex_ch:
+                    twse_market_data[ex_ch] = {
+                        "d": msg.get("d", ""),  # 揭示日期
+                        "z": msg.get("z", ""),  # 當盤成交價 (最新市價)
+                        "p": msg.get("p", ""),  # 暫緩
+                        "y": msg.get("y", ""),  # 昨收價
+                        "v": msg.get("v", "0")  # 當日累計成交量 (張數)
+                    }
+    except Exception as e:
+        print(f"證交所後端連線異常: {e}")
+    return twse_market_data
 
 def process_and_standardize(raw_data, ticker_map=None):
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
@@ -200,24 +233,29 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}
+    if err_msg: return "[]", {}, {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}
+    if clean_err or df.empty: return "[]", {}, {}, {}, {}
+    
+    # 這裡會自動找出歷史資料庫中出現過的所有 ETF 代號清單，並動態傳入證交所 API 查詢
+    all_etfs = sorted(list(df['etf'].dropna().unique()))
+    twse_live_market = fetch_twse_live_data(all_etfs)
     
     wantgoo_data = fetch_wantgoo_etf_data()
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, ticker_map, etf_name_map = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
     wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
+    twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
 
@@ -688,7 +726,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析`」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -723,6 +761,7 @@ def main():
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
+        let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
@@ -791,9 +830,9 @@ def main():
         }
 
         // ==========================================
-        // 核心修改點：動態向證交所 API 查詢不同 ETF 代號結果
+        # 核心對應修正：根據點選的 etfName 完美從動態資料庫中提取資料值，非寫死 0050
         // ==========================================
-        async function selectEtf(etfName) {
+        function selectEtf(etfName) {
             activeEtf = etfName;
             document.querySelectorAll('.etf-item-btn').forEach(b => b.classList.remove('active'));
             let activeBtn = document.getElementById(`btn-${etfName}`);
@@ -809,53 +848,41 @@ def main():
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
 
-            // 重設 UI 數值為讀取中狀態
-            document.getElementById('metaMarketPrice').innerText = "...";
-            document.getElementById('metaChange').innerText = "...";
-            document.getElementById('metaChange').style.color = "#1a202c";
-            document.getElementById('metaVolume').innerText = "...";
-            document.getElementById('txtUpdateDate').innerText = "查詢中...";
+            // 關鍵修改：使用當前被選取的 etfName 作為 Key 去讀取證交所對應代號的字典物件
+            let twseData = twseLiveMarketData[etfName] || null;
 
-            try {
-                // 依據當前點選的 etfName 動態調用交易所 API
-                let response = await fetch(`https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_${etfName}.tw`);
-                let twseJson = await response.json();
-                let twseData = (twseJson && twseJson.msgArray && twseJson.msgArray[0]) ? twseJson.msgArray[0] : null;
-
-                if (twseData) {
-                    let rawD = twseData.d || "";
-                    if(rawD.length === 8) {
-                        rawD = rawD.substring(0,4) + "-" + rawD.substring(4,6) + "-" + rawD.substring(6,8);
-                    }
-                    document.getElementById('txtUpdateDate').innerText = rawD ? `更新日期: ${rawD}` : "";
-
-                    let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
-                    document.getElementById('metaMarketPrice').innerText = priceVal > 0 ? priceVal.toFixed(2) : "-";
-
-                    let yesterdayPrice = parseFloat(twseData.y) || 0;
-                    if(priceVal > 0 && yesterdayPrice > 0) {
-                        let changeVal = priceVal - yesterdayPrice;
-                        let sign = changeVal > 0 ? "+" : "";
-                        let changeColor = changeVal > 0 ? "#dc2626" : (changeVal < 0 ? "#0f766e" : "#1a202c");
-                        let metaChangeEl = document.getElementById('metaChange');
-                        metaChangeEl.innerText = `${sign}${changeVal.toFixed(2)}`;
-                        metaChangeEl.style.color = changeColor;
-                    } else {
-                        document.getElementById('metaChange').innerText = "-";
-                    }
-
-                    // 成交量直接使用張數 (v欄位)，不上乘 1000
-                    let volume張 = parseInt(twseData.v) || 0;
-                    document.getElementById('metaVolume').innerText = volume張 > 0 ? volume張.toLocaleString() + " 張" : "-";
-                } else {
-                    setMetaFallback();
+            if (twseData) {
+                let rawD = twseData.d || "";
+                if(rawD.length === 8) {
+                    rawD = rawD.substring(0,4) + "-" + rawD.substring(4,6) + "-" + rawD.substring(6,8);
                 }
-            } catch (e) {
-                console.error("證交所 API 連線限制或跨網域異常:", e);
+                document.getElementById('txtUpdateDate').innerText = rawD ? `更新日期: ${rawD}` : "";
+
+                // 市價處理 (優先取 z，其次取 p)
+                let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
+                document.getElementById('metaMarketPrice').innerText = priceVal > 0 ? priceVal.toFixed(2) : "-";
+
+                // 漲跌計算 (最新市價 - 昨收 y)
+                let yesterdayPrice = parseFloat(twseData.y) || 0;
+                if(priceVal > 0 && yesterdayPrice > 0) {
+                    let changeVal = priceVal - yesterdayPrice;
+                    let sign = changeVal > 0 ? "+" : "";
+                    let changeColor = changeVal > 0 ? "#dc2626" : (changeVal < 0 ? "#0f766e" : "#1a202c");
+                    let metaChangeEl = document.getElementById('metaChange');
+                    metaChangeEl.innerText = `${sign}${changeVal.toFixed(2)}`;
+                    metaChangeEl.style.color = changeColor;
+                } else {
+                    document.getElementById('metaChange').innerText = "-";
+                }
+
+                // 成交量(張數)顯示維持不變
+                let volume張 = parseInt(twseData.v) || 0;
+                document.getElementById('metaVolume').innerText = volume張 > 0 ? volume張.toLocaleString() + " 張" : "-";
+            } else {
                 setMetaFallback();
             }
 
-            // 玩股網即時折溢價資料處理
+            // 折溢價
             let liveData = wantgooMarketData[etfName] || null;
             if (liveData) {
                 document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
@@ -863,13 +890,13 @@ def main():
                 document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
             }
 
-            // 規模資料處理 (百萬換算成億)
+            // 規模
             let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
             document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
             document.getElementById('metaContainer').style.display = 'flex';
 
-            // 渲染持股明細表
+            // 渲染成分股列表
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
 
@@ -1186,6 +1213,8 @@ def main():
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
         "__WANTGOO_PLACEHOLDER__", wantgoo_json
+    ).replace(
+        "__TWSE_PLACEHOLDER__", twse_json
     ).replace(
         "__TICKER_PLACEHOLDER__", ticker_json
     ).replace(
