@@ -119,30 +119,6 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. 外部即時行情 API 整合模組
 # ==========================================
-def fetch_wantgoo_etf_data():
-    api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.wantgoo.com/stock/etf/net-value"
-    }
-    try:
-        res = requests.get(api_url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            market_data = {}
-            for item in res.json():
-                stock_no = str(item.get("stockNo", "")).strip()
-                if stock_no:
-                    market_data[stock_no] = {
-                        "price": item.get("price", "-"),
-                        "change": item.get("changeValue", "-"), 
-                        "premium": item.get("discountPremiumRate", "-"), 
-                        "volume": item.get("volume", "-") 
-                    }
-            return market_data
-    except Exception as e:
-        print(f"玩股網爬蟲異常: {e}")
-    return {}
-
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
@@ -245,27 +221,25 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}, {}
+    if err_msg: return "[]", {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}, {}
+    if clean_err or df.empty: return "[]", {}, {}, {}
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    wantgoo_data = fetch_wantgoo_etf_data()
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
-    wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
+    json_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
@@ -513,31 +487,19 @@ def main():
                 <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #3182ce;">
-                      <div class="meta-label">市價</div>
+                      <div class="meta-label">即時市價</div>
                       <div class="meta-value" id="metaMarketPrice">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #e53e3e;">
-                      <div class="meta-label">漲跌</div>
+                      <div class="meta-label">當日漲跌</div>
                       <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #319795;">
-                      <div class="meta-label">折溢價</div>
-                      <div class="meta-value" id="metaPremium">-%</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #805ad5;">
-                      <div class="meta-label">規模</div>
-                      <div class="meta-value" id="metaSize">-</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #dd6b20;">
-                      <div class="meta-label">成交量</div>
+                      <div class="meta-label">成交張數</div>
                       <div class="meta-value" id="metaVolume">-</div>
                     </div>
                   </div>
@@ -717,7 +679,7 @@ def main():
                   <div id="matcherSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-12 mt-3">
-                  <div class="fw-bold text-secondary mb-2">目前已選取的投資目標目標公司：</div>
+                  <div class="fw-bold text-secondary mb-2">目前已選取的投資目標公司：</div>
                   <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded min-height" style="min-height: 58px;">
                     <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選</span>
                   </div>
@@ -818,7 +780,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -852,12 +814,11 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
-        let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
-        let selectedTargetStocks = []; // 智能組合篩選已選取公司儲存庫
+        let selectedTargetStocks = []; 
 
         function switchTab(contentId, tabId) {
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
@@ -874,7 +835,6 @@ def main():
             }
             initDashboard();
             
-            // 點擊空白處自動關閉模糊搜尋下拉選單
             document.addEventListener('click', function(e) {
                 if(!e.target.closest('.position-relative') && !e.target.closest('#stockInput') && !e.target.closest('#matcherInput')) {
                     document.getElementById('stockSuggestions').style.display = 'none';
@@ -924,15 +884,12 @@ def main():
 
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-            let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"];
+            let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨", "權證", "RDI"];
             if (meta.includes(code) || meta.includes(name)) return false;
             if (cashEx.some(k => code.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
             return true;
         }
 
-        // ==========================================
-        // 新增核心邏輯：支援個股模糊搜尋建議清單
-        // ==========================================
         function searchStockSuggestions(value, boxId, inputId, isMultiple = false) {
             let q = value.trim().toLowerCase();
             let box = document.getElementById(boxId);
@@ -969,9 +926,6 @@ def main():
             document.getElementById(boxId).style.display = 'none';
         }
 
-        // ==========================================
-        // 新增核心邏輯：ETF 智能組合篩選多標的管理與計算
-        // ==========================================
         function addTargetStockTag(code, name, boxId, inputId) {
             document.getElementById(inputId).value = "";
             document.getElementById(boxId).style.display = 'none';
@@ -1020,8 +974,6 @@ def main():
 
             etfList.forEach(eCode => {
                 let etfData = globalRawData.filter(d => d.etf === eCode && d.date === latestDate);
-                
-                // 核心驗證：檢查該 ETF 是否包含「所有」使用者選取的標的
                 let allMatched = true;
                 let stockDetailsHtml = '<div class="d-flex flex-column gap-1">';
 
@@ -1067,9 +1019,6 @@ def main():
             `).join('');
         }
 
-        // ==========================================
-        // 以下維持原有邏輯完全不變
-        // ==========================================
         function selectEtf(etfName) {
             activeEtf = etfName;
             document.querySelectorAll('.etf-item-btn').forEach(b => b.classList.remove('active'));
@@ -1115,16 +1064,6 @@ def main():
             } else {
                 setMetaFallback();
             }
-
-            let liveData = wantgooMarketData[etfName] || null;
-            if (liveData) {
-                document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
-            } else {
-                document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
-            }
-
-            let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
-            document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
             document.getElementById('metaContainer').style.display = 'flex';
 
@@ -1395,7 +1334,6 @@ def main():
 
             let agg = {};
             globalRawData.forEach(r => {
-                // 修正點 1：導入核心 normal stock 檢驗機制，踢除非股票資產與指標數據
                 if(!isNormalStock(r.stock, r.name)) return;
                 if(!agg[r.stock]) agg[r.stock] = { code: r.stock, name: r.name, nVol: 0, oVol: 0 };
                 if(r.date === latestDate) agg[r.stock].nVol += Number(r.volume);
@@ -1443,8 +1381,6 @@ def main():
 
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
-    ).replace(
-        "__WANTGOO_PLACEHOLDER__", wantgoo_json
     ).replace(
         "__TWSE_PLACEHOLDER__", twse_json
     ).replace(
