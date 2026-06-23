@@ -1,5 +1,1 @@
-libgbm1
-libnss3
-libxss1
-libasound2
-libxtst6
+
