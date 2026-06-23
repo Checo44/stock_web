@@ -712,8 +712,8 @@ def main():
               
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-5" style="position: relative;">
-                  <label class="form-label fw-bold text-secondary">請輸入台股個股名稱或代號（支援模糊搜尋）</label>
-                  <input type="text" id="matcherInput" class="form-control" placeholder="僅限台股標的" onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
+                  <label class="form-label fw-bold text-secondary">請輸入全球/台股個股名稱或代號（支援模糊搜尋）</label>
+                  <input type="text" id="matcherInput" class="form-control" placeholder="例如: 台積電、AAPL、NVDA、鴻海..." onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
                   <div id="matcherSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-12 mt-3">
@@ -818,7 +818,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -857,7 +857,7 @@ def main():
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
-        let selectedTargetStocks = []; // 智能組合篩選已選取公司儲存庫
+        let selectedTargetStocks = []; 
 
         function switchTab(contentId, tabId) {
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
@@ -874,7 +874,6 @@ def main():
             }
             initDashboard();
             
-            // 點擊空白處自動關閉模糊搜尋下拉選單
             document.addEventListener('click', function(e) {
                 if(!e.target.closest('.position-relative') && !e.target.closest('#stockInput') && !e.target.closest('#matcherInput')) {
                     document.getElementById('stockSuggestions').style.display = 'none';
@@ -899,11 +898,14 @@ def main():
             });
             document.getElementById('etfButtonList').innerHTML = listHtml;
 
+            // ==========================================
+            // 已將此處的 checked 屬性移除，實現預設不勾選
+            // ==========================================
             let checkHtml = "";
             etfList.forEach(etf => {
                 checkHtml += `
                   <div class="form-check form-check-inline me-3 py-1">
-                    <input class="form-check-input etf-compare-cb" type="checkbox" value="${etf}" id="cb-${etf}" checked>
+                    <input class="form-check-input etf-compare-cb" type="checkbox" value="${etf}" id="cb-${etf}">
                     <label class="form-check-label fw-bold" for="cb-${etf}">${getEtfDisplayLabel(etf)}</label>
                   </div>`;
             });
@@ -924,14 +926,12 @@ def main():
 
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-            // 擴充過濾關鍵字：加入 RDI、DR_、RECEIVABLES、DIVIDENDS、權證、型購、型售，確保非股票資產完全剔除
             let cashEx = [
                 "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
                 "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售"
             ];
             if (meta.includes(code) || meta.includes(name)) return false;
             
-            // 轉大寫進行全字串模糊比對
             let upperCode = code.toUpperCase();
             let upperName = name.toUpperCase();
             if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
@@ -939,9 +939,6 @@ def main():
             return true;
         }
 
-        // ==========================================
-        // 新增核心邏輯：支援個股模糊搜尋建議清單
-        // ==========================================
         function searchStockSuggestions(value, boxId, inputId, isMultiple = false) {
             let q = value.trim().toLowerCase();
             let box = document.getElementById(boxId);
@@ -978,9 +975,6 @@ def main():
             document.getElementById(boxId).style.display = 'none';
         }
 
-        // ==========================================
-        // 新增核心邏輯：ETF 智能組合篩選多標的管理與計算（全面支援全球股市）
-        // ==========================================
         function addTargetStockTag(code, name, boxId, inputId) {
             document.getElementById(inputId).value = "";
             document.getElementById(boxId).style.display = 'none';
@@ -1030,7 +1024,6 @@ def main():
             etfList.forEach(eCode => {
                 let etfData = globalRawData.filter(d => d.etf === eCode && d.date === latestDate);
                 
-                // 核心驗證：檢查該 ETF 是否包含「所有」使用者選取的標的
                 let allMatched = true;
                 let stockDetailsHtml = '<div class="d-flex flex-column gap-1">';
 
@@ -1076,9 +1069,6 @@ def main():
             `).join('');
         }
 
-        // ==========================================
-        // 以下維持原有邏輯完全不變
-        // ==========================================
         function selectEtf(etfName) {
             activeEtf = etfName;
             document.querySelectorAll('.etf-item-btn').forEach(b => b.classList.remove('active'));
