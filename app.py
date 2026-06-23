@@ -895,6 +895,32 @@ def main():
         let activeEtf = "";
         let selectedTargetStocks = []; 
 
+        <script>
+  // 請確保在渲染邏輯中加入此邏輯
+        function renderHomeTable(etfList, twseData, nameMap) {
+            let body = document.getElementById('homeTableBody');
+            body.innerHTML = etfList.map(code => {
+                let m = twseData[code] || {};
+                let z = parseFloat(m.z || m.p || 0);
+                let y = parseFloat(m.y || 0);
+                let diff = z - y;
+                let pct = y > 0 ? (diff / y * 100).toFixed(2) : "0.00";
+                
+                // 漲跌顏色與圖示邏輯
+                let colorClass = diff > 0 ? 'text-danger' : (diff < 0 ? 'text-success' : '');
+                let arrow = diff > 0 ? 'bi-caret-up-fill' : (diff < 0 ? 'bi-caret-down-fill' : '');
+                
+                return `<tr>
+                    <td class="px-3"><span class="badge bg-light text-dark font-monospace border">${code}</span></td>
+                    <td class="fw-bold text-secondary">${nameMap[code] || "-"}</td>
+                    <td class="text-end fw-bold">${z > 0 ? z.toFixed(2) : '-'}</td>
+                    <td class="text-end pe-3 ${colorClass} fw-bold">
+                        ${z > 0 ? (diff > 0 ? '+' : '') + pct + '%' : '-'}
+                        <i class="bi ${arrow}"></i>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
         function switchTab(contentId, tabId) {
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-tabs .nav-link').forEach(el => el.classList.remove('active'));
