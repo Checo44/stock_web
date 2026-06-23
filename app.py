@@ -81,6 +81,7 @@ def fetch_raw_sheet_data():
 
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
+    """讀取代號工作表，精確建立 B 欄 (ETF代號) 對應 C 欄 (ETF名稱) 的字典"""
     if not sh:
         return {}, "無法連線至 Google 試算表"
     try:
@@ -89,16 +90,17 @@ def fetch_ticker_mapping():
         if not raw_ticker or len(raw_ticker) < 2:
             return {}, None
         
+        # 由於歷史兼顧多欄位名稱，此處精準抓取對應，或根據固定順序防呆
         headers = [str(h).strip() for h in raw_ticker[0]]
         
         code_idx, name_idx = -1, -1
         for i, h in enumerate(headers):
-            if h in ["股票代號", "代號", "Stock Code", "Code"]:
+            if h in ["ETF代號", "股票代號", "代號", "Stock Code", "Code"]:
                 code_idx = i
-            if h in ["公司名稱", "股票名稱", "名稱", "Name", "Company Name"]:
+            if h in ["ETF名稱", "公司名稱", "股票名稱", "名稱", "Name", "Company Name"]:
                 name_idx = i
                 
-        if code_idx == -1: code_idx = 0
+        if code_idx == -1: code_idx = 0 # 預設對應 B 欄 (程式中索引0代表第一存在欄)
         if name_idx == -1: name_idx = 1
         
         ticker_map = {}
@@ -113,7 +115,7 @@ def fetch_ticker_mapping():
         return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 🆕 玩股網即時大表爬蟲整合模組
+# 3. 玩股網即時大表爬蟲整合模組
 # ==========================================
 def fetch_wantgoo_etf_data():
     """向玩股網發送請求，獲取全市場 ETF 的最新即時行情數據"""
@@ -125,16 +127,15 @@ def fetch_wantgoo_etf_data():
     try:
         res = requests.get(api_url, headers=headers, timeout=10)
         if res.status_code == 200:
-            # 傳回對照字典： { "0050": { "price": 107.3, "change": 1.3, "premium": -0.05, "volume": 220774 } }
             market_data = {}
             for item in res.json():
                 stock_no = str(item.get("stockNo", "")).strip()
                 if stock_no:
                     market_data[stock_no] = {
                         "price": item.get("price", "-"),
-                        "change": item.get("changeValue", "-"), # 漲跌絕對值
-                        "premium": item.get("discountPremiumRate", "-"), # 折溢價%
-                        "volume": item.get("volume", "-") # 成交量
+                        "change": item.get("changeValue", "-"), 
+                        "premium": item.get("discountPremiumRate", "-"), 
+                        "volume": item.get("volume", "-") 
                     }
             return market_data
     except Exception as e:
@@ -179,37 +180,33 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['name'] = df['name'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    if ticker_map:
-        df['name'] = df['stock'].map(ticker_map).fillna(df['name'])
-    
     return df, None
 
 # ==========================================
-# 3. 主核心資料庫結構轉換與打包
+# 4. 主核心資料庫結構轉換與打包
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
-        return "[]", {}
+        return "[]", {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty:
-        return "[]", {}
+        return "[]", {}, {}
     
-    # 在此抓取玩股網即時爬蟲數據，一同傳遞給前端
     wantgoo_data = fetch_wantgoo_etf_data()
-    
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, ticker_map
 
 # ==========================================
-# 4. 主渲染邏輯
+# 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data, ticker_map = fetch_backend_data_to_json()
     wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
+    ticker_json = json.dumps(ticker_map, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -329,6 +326,17 @@ def main():
         
         .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
         .badge-trend-sell { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #fde68a; }
+        
+        /* 🆕 ETF 頂部標題文字樣式 */
+        .etf-title-display {
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: #1e3c72;
+          margin-bottom: 0.75rem;
+          padding-left: 4px;
+          display: flex;
+          align-items: center;
+        }
       </style>
     </head>
     <body>
@@ -382,6 +390,11 @@ def main():
 
               <div class="col-lg-9">
                 
+                <div id="etfTitleContainer" class="etf-title-display" style="display: none;">
+                  <i class="bi bi-bookmark-star-fill me-2 text-warning"></i>
+                  <span id="txtEtfCode"></span>&nbsp;&nbsp;<span id="txtEtfName" class="text-dark"></span>
+                </div>
+
                 <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #3182ce;">
@@ -663,7 +676,8 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
-        let wantgooMarketData = __WANTGOO_PLACEHOLDER__; // 載入玩股網對照表
+        let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
+        let tickerMappingData = __TICKER_PLACEHOLDER__; // 載入代號名稱對照字典
         let activeEtf = "";
 
         document.addEventListener("DOMContentLoaded", function() {
@@ -729,7 +743,13 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            // 🛠️ 優先比對並抓取玩股網即時大表爬下來的數據
+            // 🆕 顯示頂部的股票代號與對照出的 ETF名稱
+            let mappedName = tickerMappingData[etfName] || "未知名稱";
+            document.getElementById('txtEtfCode').innerText = etfName;
+            document.getElementById('txtEtfName').innerText = mappedName;
+            document.getElementById('etfTitleContainer').style.display = 'block';
+
+            // 🛠️ 比對並抓取玩股網即時大表數據
             let liveData = wantgooMarketData[etfName] || null;
 
             if (liveData) {
@@ -738,7 +758,6 @@ def main():
                 document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
                 document.getElementById('metaVolume').innerText = liveData.volume !== null ? Number(liveData.volume).toLocaleString() + " 股" : "-";
             } else {
-                // 若玩股網無該代號，退回讀取原試算表中的 meta 備份欄位
                 let getMeta = (key) => {
                     let found = latestRows.find(r => r.stock === key);
                     if(!found) return "-";
@@ -1053,7 +1072,7 @@ def main():
     </html>
     """
 
-    final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data).replace("__WANTGOO_PLACEHOLDER__", wantgoo_json)
+    final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data).replace("__WANTGOO_PLACEHOLDER__", wantgoo_json).replace("__TICKER_PLACEHOLDER__", ticker_json)
     components.html(final_html, height=1600, scrolling=True)
 
 if __name__ == "__main__":
