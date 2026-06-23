@@ -707,16 +707,16 @@ def main():
           <div class="custom-tab-content" id="content-f">
             <div class="card p-4 mb-4">
               <h5 class="fw-bold text-primary mb-3"><i class="bi bi-ui-checks-grid me-2"></i>依多檔成分股公司 ➔ 逆向精準篩選適合的 ETF</h5>
-              <p class="text-muted small">請輸入您想要投資的核心公司（可連續新增多檔全球股票代號與名稱），系統將即時為您篩選出「同時具備」這些公司的全球/台股精選 ETF 陣容。</p>
+              <p class="text-muted small">請輸入您想要投資的核心公司（可連續新增多檔台灣股票代號與名稱），系統將即時為您篩選出「同時具備」這些公司的台股精選 ETF 陣容。</p>
               
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-5" style="position: relative;">
-                  <label class="form-label fw-bold text-secondary">請輸入全球/台股個股名稱或代號（支援模糊搜尋）</label>
-                  <input type="text" id="matcherInput" class="form-control" placeholder="例如: 台積電、AAPL、NVDA、鴻海..." onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
+                  <label class="form-label fw-bold text-secondary">請輸入台股個股名稱或代號（支援模糊搜尋）</label>
+                  <input type="text" id="matcherInput" class="form-control" placeholder="僅限台股標的" onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
                   <div id="matcherSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-12 mt-3">
-                  <div class="fw-bold text-secondary mb-2">目前已選取的全球投資目標公司：</div>
+                  <div class="fw-bold text-secondary mb-2">目前已選取的台灣投資目標公司：</div>
                   <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded min-height" style="min-height: 58px;">
                     <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選</span>
                   </div>
