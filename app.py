@@ -6,7 +6,6 @@ import gspread
 import json
 import os
 import requests
-# 修正點：補上被呼叫的 sync_playwright 引用，防止 NameError
 from playwright.sync_api import sync_playwright
 
 # ==========================================
@@ -121,19 +120,14 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. 外部即時行情 API 整合模組
 # ==========================================
-# 修正點：補上缺失的 fetch_wantgoo_etf_data 函式存根，防止 NameError
-def fetch_wantgoo_etf_data():
-    """
-    玩股網數據爬取存根，目前回傳空字典。
-    你可以之後在此加入具體的爬蟲或 API 串接邏輯。
-    """
-    return {}
-
 def fetch_pocket_etf_data(etf_list):
     """
     爬取 Pocket.tw 數據
     """
     results = {}
+    if not etf_list:
+        return results
+        
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         for code in etf_list:
@@ -143,7 +137,7 @@ def fetch_pocket_etf_data(etf_list):
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
                 # 抓取規模
-                size_locator = page.locator("text=資assets規模(億)").locator("xpath=following-sibling::span").first
+                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
                 size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
                 
                 # 抓取淨值與折溢價 (表格第2行)
@@ -185,7 +179,7 @@ def fetch_twse_live_data(etf_list):
     ch_param = "|".join(ch_elements)
     api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, fill/70.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://mis.twse.com.tw/"
     }
     try:
@@ -274,18 +268,20 @@ def fetch_backend_data_to_json():
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
-    wantgoo_data = fetch_wantgoo_etf_data()
+    
+    # 修正呼叫：將原先未定義的 fetch_wantgoo_etf_data 改為定義妥當的 fetch_pocket_etf_data
+    pocket_data = fetch_pocket_etf_data(all_etfs)
     
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), pocket_data, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
+    json_data, pocket_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
     
-    wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
+    pocket_json = json.dumps(pocket_market_data, ensure_ascii=False)
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
@@ -506,12 +502,6 @@ def main():
                     </div>
                   </div>
                   <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #3182ce;">
-                      <div class="meta-label">淨值</div>
-                      <div class="meta-value" id="metaNetValue">-</div>
-                    </div>
-                  </div>
-                  <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #319795;">
                       <div class="meta-label">折溢價</div>
                       <div class="meta-value" id="metaPremium">-%</div>
@@ -552,7 +542,7 @@ def main():
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
-                            <tr><th>資產代號</th><th>資產項目</th><th class="text-end">權重</th><th class="text-end">資產價值(股)</th></tr>
+                            <tr><th>資資代號</th><th>資產項目</th><th class="text-end">權重</th><th class="text-end">資產價值(股)</th></tr>
                           </thead>
                           <tbody id="assetTableBody"></tbody>
                         </table>
@@ -797,7 +787,7 @@ def main():
 
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
-        let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
+        let pocketMarketData = __WANTGOO_PLACEHOLDER__; 
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
@@ -912,7 +902,7 @@ def main():
                 setMetaFallback();
             }
 
-            let liveData = wantgooMarketData[etfName] || null;
+            let liveData = pocketMarketData[etfName] || null;
             if (liveData) {
                 document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
             } else {
@@ -1135,7 +1125,7 @@ def main():
             trendStatusEl.innerHTML = totalDiff > 0 ? `<span class="badge bg-danger">🔥 淨加碼</span>` : (totalDiff < 0 ? `<span class="badge bg-success">📉 淨減持</span>` : `<span class="badge bg-secondary">持平</span>`);
             
             let totalVolEl = document.getElementById('trendStockTotalVol');
-            totalVolVol = `${totalDiff > 0 ? '+' : ''}${Math.round(totalDiff).toLocaleString()} 股`;
+            let totalVolVol = `${totalDiff > 0 ? '+' : ''}${Math.round(totalDiff).toLocaleString()} 股`;
             totalVolEl.innerText = totalVolVol;
             totalVolEl.className = `fw-bold font-monospace mb-0 ${totalDiff > 0 ? 'text-danger' : 'text-success'}`;
 
@@ -1239,7 +1229,7 @@ def main():
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
-        "__WANTGOO_PLACEHOLDER__", wantgoo_json
+        "__WANTGOO_PLACEHOLDER__", pocket_json
     ).replace(
         "__TWSE_PLACEHOLDER__", twse_json
     ).replace(
