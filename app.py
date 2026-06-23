@@ -450,18 +450,34 @@ def main():
           color: #ef4444;
         }
 
-        /* 仿照圖片樣式的首頁表格自訂樣式 */
+        /* 仿照圖片樣式的首頁表格自訂優化樣式 */
         .home-table th {
-          background-color: #fff !important;
-          color: #555 !important;
-          font-weight: 500;
-          border-bottom: 1px solid #dee2e6;
-          padding: 10px;
+          background-color: #f8fafc !important;
+          color: #334155 !important;
+          font-weight: 700;
+          border-bottom: 2px solid #e2e8f0;
+          padding: 14px 16px;
+          font-size: 1rem;
         }
         .home-table td {
-          padding: 10px;
-          border-bottom: 1px solid #dee2e6;
+          padding: 14px 16px;
+          border-bottom: 1px solid #f1f5f9;
           background-color: #fff !important;
+          font-size: 0.95rem;
+        }
+        .home-table tbody tr:hover td {
+          background-color: #f8fafc !important;
+        }
+        .text-up {
+          color: #dc2626 !important; /* 台灣股市 漲為紅色 */
+          font-weight: 600;
+        }
+        .text-down {
+          color: #16a34a !important; /* 台灣股市 跌為綠色 */
+          font-weight: 600;
+        }
+        .text-flat {
+          color: #64748b !important; /* 平盤為灰色 */
         }
       </style>
     </head>
@@ -507,8 +523,9 @@ def main():
 
         <div id="tabsContent">
           
+          <!-- 新增的首頁分頁內容 -->
           <div class="custom-tab-content active" id="content-home">
-            <div class="card p-0">
+            <div class="card p-0 overflow-hidden shadow-sm">
               <div class="table-responsive">
                 <table class="table home-table align-middle">
                   <thead>
@@ -520,7 +537,8 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="homeTableBody">
-                    </tbody>
+                    <!-- 由 JavaScript 動態填入 -->
+                  </tbody>
                 </table>
               </div>
             </div>
@@ -937,6 +955,7 @@ def main():
                 // 優先從證交所或玩股網 API 中計算現價與漲跌幅
                 let price = "-";
                 let changePct = "-";
+                let colorClass = "text-flat"; // 預設平盤顏色
                 
                 let twseData = twseLiveMarketData[etf] || null;
                 if (twseData) {
@@ -946,24 +965,33 @@ def main():
                         price = priceVal.toFixed(2);
                         if (yesterdayPrice > 0) {
                             let diff = priceVal - yesterdayPrice;
-                            changePct = ((diff / yesterdayPrice) * 100).toFixed(2);
+                            let rawPct = (diff / yesterdayPrice) * 100;
+                            changePct = (rawPct > 0 ? "+" : "") + rawPct.toFixed(2) + "%";
+                            
+                            if (rawPct > 0) colorClass = "text-up";
+                            else if (rawPct < 0) colorClass = "text-down";
                         }
                     }
                 } else {
                     let liveData = wantgooMarketData[etf] || null;
                     if (liveData && liveData.price !== "-") {
                         price = parseFloat(liveData.price).toFixed(2);
-                        // 玩股網如果有提供漲跌幅直接對應，否則預設為減號
-                        changePct = liveData.change !== "-" ? parseFloat(liveData.change).toFixed(2) : "-";
+                        if (liveData.change !== "-") {
+                            let rawPct = parseFloat(liveData.change);
+                            changePct = (rawPct > 0 ? "+" : "") + rawPct.toFixed(2) + "%";
+                            
+                            if (rawPct > 0) colorClass = "text-up";
+                            else if (rawPct < 0) colorClass = "text-down";
+                        }
                     }
                 }
 
                 homeHtml += `
                   <tr>
-                    <td>${etf}</td>
-                    <td>${mappedName}</td>
-                    <td>${price}</td>
-                    <td>${changePct}</td>
+                    <td><span class="badge bg-light text-dark border font-monospace px-2 py-1">${etf}</span></td>
+                    <td class="fw-bold text-secondary">${mappedName}</td>
+                    <td class="font-monospace fw-bold">${price}</td>
+                    <td class="font-monospace ${colorClass}">${changePct}</td>
                   </tr>
                 `;
             });
@@ -1239,118 +1267,6 @@ def main():
             renderChangeTable(etfData, sortedDates, latestDate);
         }
 
-        function setMetaFallback() {
-            document.getElementById('metaMarketPrice').innerText = "-";
-            document.getElementById('metaChange').innerText = "-";
-            document.getElementById('metaVolume').innerText = "-";
-            document.getElementById('txtUpdateDate').innerText = "未取得即時盤態";
-        }
-
-        function renderChangeTable(etfData, sortedDates, latestDate) {
-            let compareDate = document.getElementById('startDate').value;
-            document.getElementById('dateDisplayInfo').innerHTML = `📊 <b>籌碼區間：</b> 比較日 <span class="badge bg-light text-dark border">${compareDate}</span> ➔ 基準日 <span class="badge bg-light text-dark border">${latestDate}</span>`;
-            document.getElementById('compareDateBadge').innerText = `對比區間: ${compareDate} ~ ${latestDate}`;
-
-            let currentStocks = etfData.filter(d => d.date === latestDate && isNormalStock(d.stock, d.name));
-            let compRows = etfData.filter(d => d.date === compareDate);
-
-            let trendMap = {};
-            if (sortedDates.length >= 2) {
-                let uniqStocks = [...new Set(etfData.filter(d => isNormalStock(d.stock, d.name)).map(d => d.stock))];
-                uniqStocks.forEach(sCode => {
-                    let streakCount = 0;
-                    let currentTrend = null;
-
-                    for (let i = sortedDates.length - 1; i > 0; i--) {
-                        let dNew = sortedDates[i];
-                        let dOld = sortedDates[i - 1];
-
-                        let vNew = etfData.find(d => d.date === dNew && d.stock === sCode)?.volume || 0;
-                        let vOld = etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
-                        let diff = vNew - vOld;
-
-                        if (diff === 0) break;
-                        let dayTrend = diff > 0 ? "買" : "賣";
-
-                        if (currentTrend === null) {
-                            currentTrend = dayTrend;
-                            streakCount = 1;
-                        } else if (dayTrend === currentTrend) {
-                            streakCount++;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if (streakCount > 0 && currentTrend !== null) {
-                        trendMap[sCode] = `連${currentTrend} ${streakCount} 日`;
-                    } else {
-                        trendMap[sCode] = "無變動";
-                    }
-                });
-            }
-
-            let htmlNew = ""; let htmlAdd = ""; let htmlSub = ""; let htmlDel = "";
-
-            currentStocks.forEach(r => {
-                let oldVol = compRows.find(c => c.stock === r.stock)?.volume || 0;
-                let diff = r.volume - oldVol;
-
-                if (diff !== 0) {
-                    let nature = oldVol === 0 ? "新增" : (diff > 0 ? "增加" : "減少");
-                    let badge = ""; let dStyle = "";
-                    if (nature === "新增") {
-                        badge = `<span class="badge-nature-new">${nature}</span>`; dStyle = "color:#ea580c;";
-                    } else if (nature === "增加") {
-                        badge = `<span class="badge-nature-up">${nature}</span>`; dStyle = "color:#dc2626;";
-                    } else {
-                        badge = `<span class="badge-nature-down">${nature}</span>`; dStyle = "color:#0f766e;";
-                    }
-                    
-                    let trendStr = trendMap[r.stock] || "無變動";
-                    let trendHtml = `<span class="text-muted">無變動</span>`;
-                    if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
-                    if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
-
-                    let rowHtml = `
-                        <tr>
-                          <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
-                          <td>${badge}</td>
-                          <td class="text-end fw-bold font-monospace" style="${dStyle}">${diff > 0 ? '+' : ''}${Math.round(diff).toLocaleString()} 股</td>
-                          <td class="px-4">${trendHtml}</td>
-                        </tr>`;
-
-                    if (nature === "新增") htmlNew += rowHtml;
-                    else if (nature === "增加") htmlAdd += rowHtml;
-                    else if (nature === "減少") htmlSub += rowHtml;
-                }
-            });
-
-            compRows.forEach(r => {
-                if (isNormalStock(r.stock, r.name)) {
-                    let isStillExist = currentStocks.some(c => c.stock === r.stock);
-                    if (!isStillExist && r.volume > 0) {
-                        let badge = `<span class="badge-nature-delete">刪除</span>`;
-                        let dStyle = "color:#4b5563;"; let diff = -r.volume;
-                        let trendStr = trendMap[r.stock] || "無變動";
-                        let trendHtml = `<span class="text-muted">無變動</span>`;
-                        if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
-                        if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
-                        
-                        htmlDel += `
-                            <tr>
-                              <td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td>
-                              <td>${badge}</td>
-                              <td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(diff).toLocaleString()} 股</td>
-                              <td class="px-4">${trendHtml}</td>
-                            </tr>`;
-                    }
-                }
-            });
-
-            document.getElementById('changeTableBody').innerHTML = (htmlNew + htmlAdd + htmlSub + htmlDel) || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量未發生增減變動</td></tr>';
-        }
-
         function toggleCustomDates() {
             let type = document.getElementById('rangeType').value;
             document.getElementById('customDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
@@ -1513,6 +1429,12 @@ def main():
                 });
                 return `<tr>${row}</tr>`;
             }).join('');
+        }
+        function setMetaFallback() {
+            document.getElementById('metaMarketPrice').innerText = "-";
+            document.getElementById('metaChange').innerText = "-";
+            document.getElementById('metaVolume').innerText = "-";
+            document.getElementById('txtUpdateDate').innerText = "未取得即時盤態";
         }
       </script>
     </body>
