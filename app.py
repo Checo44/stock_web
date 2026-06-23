@@ -1,4 +1,19 @@
 import os
+import sys
+
+# 強制導向到 Streamlit Cloud 的標準快取路徑
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
+
+# 在程式碼內自動補載，免去 requirements.txt 的 -cmd 困擾
+try:
+    import playwright
+except ImportError:
+    pass
+else:
+    # 如果 playwright 載入了，但找不到瀏覽器，自動進行補載
+    if not os.path.exists(os.environ["PLAYWRIGHT_BROWSERS_PATH"]):
+        os.system("playwright install chromium")
+
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -8,7 +23,6 @@ import json
 import requests
 import time
 from playwright.sync_api import sync_playwright
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
