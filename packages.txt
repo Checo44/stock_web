@@ -1,6 +1,5 @@
 playwright
 libgbm1
-libgconf-2-4
 libnss3
 libxss1
 libasound2
