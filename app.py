@@ -8,6 +8,7 @@ import json
 import requests
 import time
 from playwright.sync_api import sync_playwright
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
