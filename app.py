@@ -6,6 +6,8 @@ import gspread
 import json
 import os
 import requests
+# 修正點：補上被呼叫的 sync_playwright 引用，防止 NameError
+from playwright.sync_api import sync_playwright
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -119,6 +121,14 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. 外部即時行情 API 整合模組
 # ==========================================
+# 修正點：補上缺失的 fetch_wantgoo_etf_data 函式存根，防止 NameError
+def fetch_wantgoo_etf_data():
+    """
+    玩股網數據爬取存根，目前回傳空字典。
+    你可以之後在此加入具體的爬蟲或 API 串接邏輯。
+    """
+    return {}
+
 def fetch_pocket_etf_data(etf_list):
     """
     爬取 Pocket.tw 數據
@@ -133,7 +143,7 @@ def fetch_pocket_etf_data(etf_list):
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
                 # 抓取規模
-                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
+                size_locator = page.locator("text=資assets規模(億)").locator("xpath=following-sibling::span").first
                 size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
                 
                 # 抓取淨值與折溢價 (表格第2行)
@@ -153,7 +163,6 @@ def fetch_pocket_etf_data(etf_list):
         browser.close()
     return results
 
-# 修正點：補上被呼叫的 fetch_twse_live_data 函式，防止 NameError
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
@@ -176,7 +185,7 @@ def fetch_twse_live_data(etf_list):
     ch_param = "|".join(ch_elements)
     api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, fill/70.0.0.0 Safari/537.36",
         "Referer": "https://mis.twse.com.tw/"
     }
     try:
@@ -496,11 +505,10 @@ def main():
                       <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
-                  <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #3182ce;">
                       <div class="meta-label">淨值</div>
-                      <div class="meta-value" id="metaMarketPrice">-</div>
+                      <div class="meta-value" id="metaNetValue">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
