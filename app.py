@@ -6,7 +6,8 @@ import numpy as np
 import gspread
 import json
 import requests
-
+import time
+from playwright.sync_api import sync_playwright
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
@@ -121,36 +122,64 @@ def fetch_etf_name_mapping():
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    改用純 requests API 取得 Pocket 數據，徹底捨棄 Playwright
+    精準爬取 Pocket.tw 的折溢價表格數據
     """
     results = {}
     if not etf_list:
         return results
+
+    with sync_playwright() as p:
+        # 建議在雲端環境加上 arguments 防止閃退
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
         
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.pocket.tw/"
-    }
-    
-    for code in etf_list:
-        try:
-            # 嘗試直接向口袋證券的後端資料 API 請求 (或從網頁提取)
-            api_url = f"https://www.pocket.tw/api/etf/tw/{code}/discountpremium" # 範例後端路徑
-            res = requests.get(api_url, headers=headers, timeout=10)
-            
-            if res.status_code == 200:
-                data = res.json()
-                # 假設 API 回傳格式，若非 API 則可用底部的 fallback
-                results[code] = {
-                    "size": data.get("size", "-"),
-                    "nav": data.get("nav", "-"),
-                    "premium": data.get("premium", "-%")
-                }
-            else:
-                results[code] = {"size": "-", "nav": "-", "premium": "-%"}
-        except:
-            results[code] = {"size": "-", "nav": "-", "premium": "-%"}
-            
+        for code in etf_list:
+            print(f"🔎 正在爬取折溢價數據 [{code}]...")
+            try:
+                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
+                page = browser.new_page()
+                page.goto(url, wait_until="networkidle", timeout=60000)
+                time.sleep(2)  # 等待前端非同步資料渲染
+                
+                # 1. 抓取規模 (維持你原本的定位邏輯)
+                size_locator = page.locator("text=資產規模(億)").locator("xpath=following-sibling::span").first
+                size = size_locator.inner_text().strip() if size_locator.count() > 0 else "-"
+                
+                # 2. 【精準表格定位法】鎖定包含「淨值」和「折溢價(%)」的表格
+                target_table = page.locator("table").filter(has_text="淨值").filter(has_text="折溢價(%)").first
+                target_table.wait_for(state="attached", timeout=15000)
+                
+                rows = target_table.locator("tr").all()
+                nav, premium = "-", "-"
+                
+                # 遍歷表格行尋找數據
+                for row in rows:
+                    cells = row.locator("th, td").all_inner_texts()
+                    clean_row = [c.replace('\n', ' ').strip() for c in cells]
+                    
+                    if len(clean_row) < 4 or not any(clean_row): 
+                        continue
+                        
+                    # 跳過表頭行，抓取資料行 (例如包含日期的那一行 2026/06/23)
+                    if "淨值" in clean_row or "折溢價(%)" in clean_row:
+                        continue
+                    else:
+                        # 依照圖片中的欄位順序：[0]日期, [1]收盤價, [2]淨值, [3]折溢價(%)
+                        nav = clean_row[2]
+                        premium = clean_row[3]
+                        break # 抓到最新的一筆（通常是第一行）就跳出
+                
+                results[code] = {"size": size, "nav": nav, "premium": premium}
+                page.close()
+                print(f"✅ [{code}] 爬取成功 -> 淨值: {nav}, 折溢價: {premium}, 規模: {size}")
+                
+            except Exception as e:
+                print(f"⚠️ [{code}] 抓取出錯: {e}")
+                results[code] = {"size": "-", "nav": "-", "premium": "-"}
+                
+        browser.close()
     return results
 
 def fetch_twse_live_data(etf_list):
