@@ -117,7 +117,7 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組 (Python 後端發送，避開前端 CORS 與限制)
+# 3. 外部即時行情 API 整合模組
 # ==========================================
 def fetch_wantgoo_etf_data():
     api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
@@ -143,14 +143,30 @@ def fetch_wantgoo_etf_data():
         print(f"玩股網爬蟲異常: {e}")
     return {}
 
-# 核心修正：動態根據傳入的 ETF 列表，批次向證交所請求所有對應代號的即時盤態
+# 修正點：嚴格過濾真實數字型態的 ETF 代號，防範非數字干擾，並同時支援 tse 與 otc 查詢
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
     
+    # 過濾出真正的 ETF 代號（純數字或常見代號），排除「規模」、「折溢價」等雜質
+    valid_etfs = []
+    for code in etf_list:
+        c_clean = str(code).strip()
+        if c_clean and (c_clean.isdigit() or len(c_clean) >= 4):
+            valid_etfs.append(c_clean)
+
+    if not valid_etfs:
+        return {}
+
     twse_market_data = {}
-    # 將所有 ETF 拼接到參數中，例如：tse_0050.tw|tse_0056.tw|tse_00878.tw
-    ch_param = "|".join([f"tse_{code}.tw" for code in etf_list])
+    
+    # 同時向證交所發送 tse_ 與 otc_ 查詢，確保上市上櫃 ETF 都能抓到
+    ch_elements = []
+    for code in valid_etfs:
+        ch_elements.append(f"tse_{code}.tw")
+        ch_elements.append(f"otc_{code}.tw")
+        
+    ch_param = "|".join(ch_elements)
     api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -162,15 +178,14 @@ def fetch_twse_live_data(etf_list):
             res_json = res.json()
             msg_array = res_json.get("msgArray", [])
             for msg in msg_array:
-                # 證交所返回的代號欄位為 "c" (例如 "0050")
-                ex_ch = msg.get("c", "").strip() 
+                ex_ch = msg.get("c", "").strip() # 獲取證券代號，如 "0050"
                 if ex_ch:
                     twse_market_data[ex_ch] = {
                         "d": msg.get("d", ""),  # 揭示日期
-                        "z": msg.get("z", ""),  # 當盤成交價 (最新市價)
-                        "p": msg.get("p", ""),  # 暫緩
-                        "y": msg.get("y", ""),  # 昨收價
-                        "v": msg.get("v", "0")  # 當日累計成交量 (張數)
+                        "z": msg.get("z", "-"),  # 當盤成交價
+                        "p": msg.get("p", "-"),  # 暫緩
+                        "y": msg.get("y", "-"),  # 昨收價
+                        "v": msg.get("v", "0")   # 當日累計成交量(張數)
                     }
     except Exception as e:
         print(f"證交所後端連線異常: {e}")
@@ -241,7 +256,6 @@ def fetch_backend_data_to_json():
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty: return "[]", {}, {}, {}, {}
     
-    # 這裡會自動找出歷史資料庫中出現過的所有 ETF 代號清單，並動態傳入證交所 API 查詢
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
@@ -726,7 +740,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -829,9 +843,6 @@ def main():
             return true;
         }
 
-        // ==========================================
-        # 核心對應修正：根據點選的 etfName 完美從動態資料庫中提取資料值，非寫死 0050
-        // ==========================================
         function selectEtf(etfName) {
             activeEtf = etfName;
             document.querySelectorAll('.etf-item-btn').forEach(b => b.classList.remove('active'));
@@ -848,7 +859,7 @@ def main():
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
 
-            // 關鍵修改：使用當前被選取的 etfName 作為 Key 去讀取證交所對應代號的字典物件
+            // 讀取證交所對應字典物件
             let twseData = twseLiveMarketData[etfName] || null;
 
             if (twseData) {
@@ -858,7 +869,7 @@ def main():
                 }
                 document.getElementById('txtUpdateDate').innerText = rawD ? `更新日期: ${rawD}` : "";
 
-                // 市價處理 (優先取 z，其次取 p)
+                // 市價處理 (優先取當盤成交價 z，次取當當日暫緩價 p)
                 let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
                 document.getElementById('metaMarketPrice').innerText = priceVal > 0 ? priceVal.toFixed(2) : "-";
 
@@ -875,7 +886,7 @@ def main():
                     document.getElementById('metaChange').innerText = "-";
                 }
 
-                // 成交量(張數)顯示維持不變
+                // 成交量(張數)
                 let volume張 = parseInt(twseData.v) || 0;
                 document.getElementById('metaVolume').innerText = volume張 > 0 ? volume張.toLocaleString() + " 張" : "-";
             } else {
