@@ -10,7 +10,7 @@ import requests
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
-st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ETF 籌碼與即時大數據監控面板", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
@@ -26,6 +26,18 @@ st.markdown("""
         iframe {
             display: block;
             border: none;
+        }
+        /* 側邊導覽列（如果有的話）或是 Streamlit 基本元件字型與間距優化 */
+        .stRadio > div {
+            flex-direction: row;
+            justify-content: center;
+            background-color: #111827;
+            padding: 10px;
+            border-bottom: 1px solid #1f2937;
+        }
+        div.row-widget.stRadio > div[data-testid="stMarkdownContainer"] > p {
+            color: #f3f4f6 !important;
+            font-weight: bold;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -117,57 +129,8 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組 (高穩定、純 requests 免開瀏覽器)
+# 3. 證交所/櫃買中心 即時行情 API 整合模組
 # ==========================================
-def fetch_pocket_etf_data(etf_list):
-    """
-    完全捨棄 Playwright，直接向口袋證券折溢價 API 節點請求數據
-    """
-    results = {}
-    if not etf_list:
-        return results
-        
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.pocket.tw/"
-    }
-    
-    for code in etf_list:
-        print(f"🔎 正在抓取折溢價數據 [{code}]...")
-        try:
-            # 口袋證券網頁底層實際呼叫的折溢價 API 節點
-            api_url = f"https://www.pocket.tw/api/etf/tw/{code}/discountpremium"
-            res = requests.get(api_url, headers=headers, timeout=10)
-            
-            if res.status_code == 200:
-                data = res.json()
-                
-                # 取得今日/最新一筆的折溢價表格細節
-                details = data.get("details", [])
-                if details:
-                    latest_row = details[0] # 第一筆即為最新日期
-                    nav = str(latest_row.get("nav", "-"))          # 淨值
-                    premium = str(latest_row.get("premium", "-"))  # 折溢價(%)
-                    if premium != "-":
-                        premium = f"{premium}%"
-                else:
-                    nav, premium = "-", "-"
-                
-                # 取得資產規模
-                size = str(data.get("assetSize", "-"))
-                if size != "-":
-                    size = f"{size}億"
-                    
-                results[code] = {"size": size, "nav": nav, "premium": premium}
-                print(f"✅ [{code}] 抓取成功 -> 淨值: {nav}, 折溢價: {premium}, 規模: {size}")
-            else:
-                results[code] = {"size": "-", "nav": "-", "premium": "-"}
-        except Exception as e:
-            print(f"⚠️ [{code}] 抓取失敗: {e}")
-            results[code] = {"size": "-", "nav": "-", "premium": "-"}
-            
-    return results
-
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
@@ -175,7 +138,7 @@ def fetch_twse_live_data(etf_list):
     valid_etfs = []
     for code in etf_list:
         c_clean = str(code).strip()
-        if c_clean and (c_clean.isdigit() or len(c_clean) >= 4):
+        if c_clean:
             valid_etfs.append(c_clean)
 
     if not valid_etfs:
@@ -199,9 +162,11 @@ def fetch_twse_live_data(etf_list):
             res_json = res.json()
             msg_array = res_json.get("msgArray", [])
             for msg in msg_array:
-                ex_ch = msg.get("c", "").strip() 
-                if ex_ch:
-                    twse_market_data[ex_ch] = {
+                code_key = msg.get("c", "").strip() 
+                if code_key:
+                    # z: 當盤成交價, y: 昨收價, v: 當日累計成交量, n: 股票名稱
+                    twse_market_data[code_key] = {
+                        "n": msg.get("n", "-"),
                         "d": msg.get("d", ""),  
                         "z": msg.get("z", "-"),  
                         "p": msg.get("p", "-"),  
@@ -209,7 +174,7 @@ def fetch_twse_live_data(etf_list):
                         "v": msg.get("v", "0")   
                     }
     except Exception as e:
-        print(f"證交所後端連線異常: {e}")
+        print(f"證交所 API 連線異常: {e}")
     return twse_market_data
 
 def process_and_standardize(raw_data, ticker_map=None):
@@ -245,97 +210,4 @@ def process_and_standardize(raw_data, ticker_map=None):
         return pd.DataFrame(), f"主要欄位對照失敗。缺少對應: {missing}"
 
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df = df.dropna(subset=['date'])
-    
-    df['weight'] = pd.to_numeric(df['weight'].astype(str).str.replace('%','', regex=False).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
-    if df['weight'].max() <= 1.0: 
-        df['weight'] = df['weight'] * 100
-        
-    df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
-    df['stock'] = df['stock'].astype(str).str.strip()
-    df['etf'] = df['etf'].astype(str).str.strip()
-    
-    if ticker_map:
-        mapped_series = df['stock'].map(ticker_map)
-        backup_col = orig_name_col if (orig_name_col and orig_name_col in df.columns) else 'name'
-        df['name'] = mapped_series.fillna(df[backup_col].astype(str).str.strip())
-    else:
-        df['name'] = df['name'].astype(str).str.strip()
-        
-    return df, None
-
-# ==========================================
-# 4. 主核心資料庫結構轉換與打包
-# ==========================================
-def fetch_backend_data_to_json():
-    raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}, {}
-        
-    ticker_map, _ = fetch_ticker_mapping()
-    etf_name_map, _ = fetch_etf_name_mapping()
-    
-    df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}, {}
-    
-    all_etfs = sorted(list(df['etf'].dropna().unique()))
-    twse_live_market = fetch_twse_live_data(all_etfs)
-    pocket_data = fetch_pocket_etf_data(all_etfs)
-    
-    records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), pocket_data, twse_live_market, ticker_map, etf_name_map
-
-# ==========================================
-# 5. 前端 HTML / JS 視覺化範本定義
-# ==========================================
-html_template = """
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <title>ETF 大數據系統</title>
-    </head>
-<body>
-    <div id="app"></div>
-    <script>
-        // 接收來自 Python 後端注入的即時 JSON 數據
-        const rawBackendData = __DATA_PLACEHOLDER__;
-        const pocketData = __POCKET_PLACEHOLDER__;
-        const twseData = __TWSE_PLACEHOLDER__;
-        const tickerMap = __TICKER_PLACEHOLDER__;
-        const etfNameMap = __ETF_NAME_PLACEHOLDER__;
-        
-        console.log("數據載入成功！開始渲染前端 UI...");
-        // 這裡跑你原本完整的 JavaScript 渲染、篩選、計算邏輯
-    </script>
-</body>
-</html>
-"""
-
-# ==========================================
-# 6. 主渲染邏輯
-# ==========================================
-def main():
-    json_data, pocket_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
-    
-    pocket_json = json.dumps(pocket_market_data, ensure_ascii=False)
-    twse_json = json.dumps(twse_live_market, ensure_ascii=False)
-    ticker_json = json.dumps(ticker_map, ensure_ascii=False)
-    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
-
-    # 完美鏈結替換前端佔位符，絕無語法錯誤
-    final_html = html_template.replace(
-        "__DATA_PLACEHOLDER__", json_data
-    ).replace(
-        "__POCKET_PLACEHOLDER__", pocket_json
-    ).replace(
-        "__TWSE_PLACEHOLDER__", twse_json
-    ).replace(
-        "__TICKER_PLACEHOLDER__", ticker_json
-    ).replace(
-        "__ETF_NAME_PLACEHOLDER__", etf_name_json
-    )
-    
-    components.html(final_html, height=1600, scrolling=True)
-
-if __name__ == "__main__":
-    main()
+    df = df.
