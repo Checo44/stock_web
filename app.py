@@ -117,7 +117,7 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組
+# 3. 外部即時行情 API 與 Playwright 爬蟲模組
 # ==========================================
 def fetch_wantgoo_etf_data():
     api_url = "https://www.wantgoo.com/api/etf/nav-and-discount-premium"
@@ -143,12 +143,10 @@ def fetch_wantgoo_etf_data():
         print(f"玩股網爬蟲異常: {e}")
     return {}
 
-# 修正點：嚴格過濾真實數字型態的 ETF 代號，防範非數字干擾，並同時支援 tse 與 otc 查詢
 def fetch_twse_live_data(etf_list):
     if not etf_list:
         return {}
     
-    # 過濾出真正的 ETF 代號（純數字或常見代號），排除「規模」、「折溢價」等雜質
     valid_etfs = []
     for code in etf_list:
         c_clean = str(code).strip()
@@ -160,7 +158,6 @@ def fetch_twse_live_data(etf_list):
 
     twse_market_data = {}
     
-    # 同時向證交所發送 tse_ 與 otc_ 查詢，確保上市上櫃 ETF 都能抓到
     ch_elements = []
     for code in valid_etfs:
         ch_elements.append(f"tse_{code}.tw")
@@ -178,18 +175,93 @@ def fetch_twse_live_data(etf_list):
             res_json = res.json()
             msg_array = res_json.get("msgArray", [])
             for msg in msg_array:
-                ex_ch = msg.get("c", "").strip() # 獲取證券代號，如 "0050"
+                ex_ch = msg.get("c", "").strip() 
                 if ex_ch:
                     twse_market_data[ex_ch] = {
-                        "d": msg.get("d", ""),  # 揭示日期
-                        "z": msg.get("z", "-"),  # 當盤成交價
-                        "p": msg.get("p", "-"),  # 暫緩
-                        "y": msg.get("y", "-"),  # 昨收價
-                        "v": msg.get("v", "0")   # 當日累計成交量(張數)
+                        "d": msg.get("d", ""),  
+                        "z": msg.get("z", "-"),  
+                        "p": msg.get("p", "-"),  
+                        "y": msg.get("y", "-"),  
+                        "v": msg.get("v", "0")   
                     }
     except Exception as e:
         print(f"證交所後端連線異常: {e}")
     return twse_market_data
+
+@st.cache_data(ttl=300)
+def fetch_pocket_etf_data(etf_list):
+    """
+    使用 Playwright 動態爬取口袋證券的規模、最新淨值與折溢價
+    """
+    pocket_data = {}
+    if not etf_list:
+        return pocket_data
+        
+    import re
+    from playwright.sync_api import sync_playwright
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            
+            for etf in etf_list:
+                etf_clean = str(etf).strip()
+                if not etf_clean:
+                    continue
+                
+                url = f"https://www.pocket.tw/etf/tw/{etf_clean}/discountpremium?page&parent&source"
+                page = context.new_page()
+                
+                try:
+                    page.goto(url, timeout=15000)
+                    page.wait_for_selector("text=資產規模", timeout=10000)
+                    
+                    body_text = page.locator("body").inner_text()
+                    
+                    # 1. 抓取資產規模
+                    size_match = re.search(r"資產規模\(億\)\s*[:：]\s*([\d\.,]+)", body_text)
+                    size = size_match.group(1) if size_match else "-"
+                    
+                    # 2. 透過表格列抓取最新的淨值與折溢價
+                    nav = "-"
+                    premium = "-"
+                    
+                    rows = page.locator("table tr").all()
+                    for row in rows:
+                        cells = row.locator("td").all_inner_texts()
+                        if len(cells) >= 4:
+                            date_text = cells[0].strip()
+                            if re.match(r"^\d{4}[/\-]\d{2}[/\-]\d{2}$", date_text):
+                                nav = cells[2].strip()
+                                premium = cells[3].strip()
+                                break
+                                
+                    # 如果表格解析失敗，使用純文字正則備用方案
+                    if nav == "-" or premium == "-":
+                        row_match = re.search(r"(\d{4}[/\-]\d{2}[/\-]\d{2})\s+([\d\.,]+)\s+([\d\.,]+)\s+([\d\.,\-]+)", body_text)
+                        if row_match:
+                            nav = row_match.group(3)
+                            premium = row_match.group(4)
+                            
+                    pocket_data[etf_clean] = {
+                        "nav": nav,
+                        "premium": premium,
+                        "size": size
+                    }
+                except Exception as e:
+                    print(f"讀取口袋證券 ETF {etf_clean} 失敗: {e}")
+                    pocket_data[etf_clean] = {"nav": "-", "premium": "-", "size": "-"}
+                finally:
+                    page.close()
+                    
+            browser.close()
+    except Exception as e:
+        print(f"Playwright 全域異常: {e}")
+        
+    return pocket_data
 
 def process_and_standardize(raw_data, ticker_map=None):
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
@@ -248,30 +320,33 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}, {}
+    if err_msg: return "[]", {}, {}, {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}, {}
+    if clean_err or df.empty: return "[]", {}, {}, {}, {}, {}
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
     wantgoo_data = fetch_wantgoo_etf_data()
+    pocket_data = fetch_pocket_etf_data(all_etfs)
+    
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map, pocket_data
 
 # ==========================================
 # 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, pocket_market_data = fetch_backend_data_to_json()
     wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+    pocket_json = json.dumps(pocket_market_data, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -486,6 +561,12 @@ def main():
                     <div class="meta-card" style="border-left-color: #e53e3e;">
                       <div class="meta-label">漲跌</div>
                       <div class="meta-value" id="metaChange">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #4c51bf;">
+                      <div class="meta-label">淨值</div>
+                      <div class="meta-value" id="metaNav">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
@@ -778,6 +859,7 @@ def main():
         let twseLiveMarketData = __TWSE_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
+        let pocketMarketData = __POCKET_PLACEHOLDER__;
         let activeEtf = "";
 
         function switchTab(contentId, tabId) {
@@ -859,7 +941,6 @@ def main():
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
 
-            // 讀取證交所對應字典物件
             let twseData = twseLiveMarketData[etfName] || null;
 
             if (twseData) {
@@ -869,11 +950,9 @@ def main():
                 }
                 document.getElementById('txtUpdateDate').innerText = rawD ? `更新日期: ${rawD}` : "";
 
-                // 市價處理 (優先取當盤成交價 z，次取當當日暫緩價 p)
                 let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
                 document.getElementById('metaMarketPrice').innerText = priceVal > 0 ? priceVal.toFixed(2) : "-";
 
-                // 漲跌計算 (最新市價 - 昨收 y)
                 let yesterdayPrice = parseFloat(twseData.y) || 0;
                 if(priceVal > 0 && yesterdayPrice > 0) {
                     let changeVal = priceVal - yesterdayPrice;
@@ -886,28 +965,48 @@ def main():
                     document.getElementById('metaChange').innerText = "-";
                 }
 
-                // 成交量(張數)
                 let volume張 = parseInt(twseData.v) || 0;
                 document.getElementById('metaVolume').innerText = volume張 > 0 ? volume張.toLocaleString() + " 張" : "-";
             } else {
                 setMetaFallback();
             }
 
-            // 折溢價
-            let liveData = wantgooMarketData[etfName] || null;
-            if (liveData) {
-                document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
+            // 讀取 Pocket Playwright 抓取的動態整合資料
+            let pocketData = pocketMarketData[etfName] || null;
+
+            // 填入 淨值 欄位
+            if (pocketData && pocketData.nav && pocketData.nav !== "-") {
+                document.getElementById('metaNav').innerText = pocketData.nav;
             } else {
-                document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
+                document.getElementById('metaNav').innerText = "-";
             }
 
-            // 規模
-            let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
-            document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
+            // 填入 折溢價 欄位
+            if (pocketData && pocketData.premium && pocketData.premium !== "-") {
+                let premText = pocketData.premium;
+                if (!premText.includes("%")) premText += "%";
+                document.getElementById('metaPremium').innerText = premText;
+            } else {
+                let liveData = wantgooMarketData[etfName] || null;
+                if (liveData) {
+                    document.getElementById('metaPremium').innerText = liveData.premium !== null ? liveData.premium + "%" : "-%";
+                } else {
+                    document.getElementById('metaPremium').innerText = (latestRows.find(r => r.stock === "折溢價")?.volume || "-") + "%";
+                }
+            }
+
+            // 填入 規模 欄位
+            if (pocketData && pocketData.size && pocketData.size !== "-") {
+                let sizeText = pocketData.size;
+                if (!sizeText.includes("億")) sizeText += " 億";
+                document.getElementById('metaSize').innerText = sizeText;
+            } else {
+                let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
+                document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
+            }
 
             document.getElementById('metaContainer').style.display = 'flex';
 
-            // 渲染成分股列表
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
 
@@ -1230,6 +1329,8 @@ def main():
         "__TICKER_PLACEHOLDER__", ticker_json
     ).replace(
         "__ETF_NAME_PLACEHOLDER__", etf_name_json
+    ).replace(
+        "__POCKET_PLACEHOLDER__", pocket_json
     )
     components.html(final_html, height=1600, scrolling=True)
 
