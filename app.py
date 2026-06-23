@@ -559,6 +559,18 @@ def main():
                       <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
+                    <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #319795;">
+                      <div class="meta-label">折溢價</div>
+                      <div class="meta-value" id="metaPremium">-%</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #805ad5;">
+                      <div class="meta-label">規模</div>
+                      <div class="meta-value" id="metaSize">-</div>
+                    </div>
+                  </div>
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #dd6b20;">
                       <div class="meta-label">成交量</div>
