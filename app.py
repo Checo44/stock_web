@@ -496,6 +496,13 @@ def main():
                       <div class="meta-value" id="metaChange">-</div>
                     </div>
                   </div>
+                  <div id="metaContainer" class="row g-2 mb-4" style="display: none;">
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #3182ce;">
+                      <div class="meta-label">淨值</div>
+                      <div class="meta-value" id="metaMarketPrice">-</div>
+                    </div>
+                  </div>
                   <div class="col-6 col-md">
                     <div class="meta-card" style="border-left-color: #319795;">
                       <div class="meta-label">折溢價</div>
