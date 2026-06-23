@@ -335,22 +335,41 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}, {}, {}
+    if err_msg: return "[]", {}, {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}, {}, {}
+    if clean_err or df.empty: return "[]", {}, {}, {}, {}
     
+    # 取得當前資料庫中所有的 ETF 代號清單
     all_etfs = sorted(list(df['etf'].dropna().unique()))
+    
+    # 1. 抓取原本的證交所即時行情
     twse_live_market = fetch_twse_live_data(all_etfs)
     
+    # 2. 抓取原本的玩股網基本字典（保留 price, change, volume 等欄位作為基底）
     wantgoo_data = fetch_wantgoo_etf_data()
-    pocket_data = fetch_pocket_etf_data(all_etfs)
     
+    # 3. 呼叫全新 Playwright 強效爬蟲，從口袋證券精準捕獲「規模、淨值、折溢價%」
+    pocket_data = fetch_pocket_etf_data_batch(all_etfs)
+    
+    # 4. 進行高精準度覆蓋：將口袋證券的精準數據融入 wantgoo_data
+    for code, p_info in pocket_data.items():
+        if code not in wantgoo_data:
+            wantgoo_data[code] = {
+                "price": "-",
+                "change": "-",
+                "volume": "-"
+            }
+        # 強制替換成口袋證券抓取到的強韌數據
+        wantgoo_data[code]["size"] = p_info["size"]
+        wantgoo_data[code]["premium"] = p_info["premium"]
+        wantgoo_data[code]["nav"] = p_info["nav"]  # 若前端未來需顯示最新淨值，亦可直接調用
+
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map, pocket_data
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
