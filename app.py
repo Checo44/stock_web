@@ -1,10 +1,11 @@
 import os
+import sys
+
 # ==========================================
-# 0. 雲端環境 Playwright 瀏覽器核心自動初始化
+# 0. 雲端環境 Playwright 瀏覽器路徑校正
 # ==========================================
-# 檢查是否在 Streamlit Cloud 或是缺少瀏覽器，若是則自動執行安裝程序
-if not os.path.exists(os.path.expanduser("~/.cache/ms-playwright")):
-    os.system("playwright install chromium")
+# 強制導向到 Streamlit Cloud 的標準快取路徑
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.expanduser("~/.cache/ms-playwright")
 
 import streamlit as st
 import streamlit.components.v1 as components
