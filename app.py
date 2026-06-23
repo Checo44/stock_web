@@ -32,7 +32,8 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "代號"  # 💡 確保對照工作表名稱為「代號」
+WORKSHEET_TICKER = "代號"      # 💡 個股代號對照
+WORKSHEET_ETF_NAME = "名稱"    # 💡 ETF名稱對照
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -81,26 +82,41 @@ def fetch_raw_sheet_data():
 
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
-    if not sh:
-        return {}, "無法連線至 Google 試算表"
+    """ 💡 抓取個股名稱對照表 (代號工作表：A欄代號 -> B欄公司名稱) """
+    if not sh: return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_TICKER)
         raw_ticker = ws.get_all_values()
-        if not raw_ticker or len(raw_ticker) < 1:
-            return {}, None
+        if not raw_ticker or len(raw_ticker) < 1: return {}, None
         
         ticker_map = {}
-        # 💡 修改對照邏輯：通常第一列為欄位名稱，從第二列開始讀取
-        # 根據您的需求：對照 A 欄（代號），取得 B 欄（公司名稱）
         for row in raw_ticker[1:]:
             if len(row) >= 2:
-                code = str(row[0]).strip()  # A 欄：股票代號
-                name = str(row[1]).strip()  # B 欄：公司名稱
-                if code:
-                    ticker_map[code] = name
+                code = str(row[0]).strip()
+                name = str(row[1]).strip()
+                if code: ticker_map[code] = name
         return ticker_map, None
     except Exception as e:
         return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
+
+@st.cache_data(ttl=300)
+def fetch_etf_name_mapping():
+    """ 💡 抓取 ETF 名稱對照表 (名稱工作表：A欄ETF代號 -> B欄ETF名稱) """
+    if not sh: return {}, "無法連線至 Google 試算表"
+    try:
+        ws = sh.worksheet(WORKSHEET_ETF_NAME)
+        raw_etf = ws.get_all_values()
+        if not raw_etf or len(raw_etf) < 1: return {}, None
+        
+        etf_name_map = {}
+        for row in raw_etf[1:]:
+            if len(row) >= 2:
+                code = str(row[0]).strip()
+                name = str(row[1]).strip()
+                if code: etf_name_map[code] = name
+        return etf_name_map, None
+    except Exception as e:
+        return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
 # 3. 玩股網即時大表爬蟲整合模組
@@ -166,11 +182,9 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 💡 核心修正：對照「代號」工作表，股票代號相同者，一律清洗並對照為 B 欄位的公司名稱
+    # 💡 核心修正：個股邏輯不變，對照「代號」工作表
     if ticker_map:
-        # 建立清洗對照邏輯：先拿代號去 ticker_map 找
         df['name'] = df['stock'].apply(lambda x: ticker_map.get(x, ""))
-        # 如果對照表內找不到該代號（例如現金、期貨或特殊項目），則保留原本 History 裡面的原始名稱
         df['name'] = df['name'].replace("", np.nan).fillna(df['成分股名稱' if '成分股名稱' in df.columns else 'name'].astype(str).str.strip())
     else:
         df['name'] = df['name'].astype(str).str.strip()
@@ -182,26 +196,26 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg:
-        return "[]", {}, {}
+    if err_msg: return "[]", {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
+    etf_name_map, _ = fetch_etf_name_mapping()  # 💡 載入全新 ETF 名稱映射
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty:
-        return "[]", {}, {}
+    if clean_err or df.empty: return "[]", {}, {}, {}
     
     wantgoo_data = fetch_wantgoo_etf_data()
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), wantgoo_data, ticker_map
+    return json.dumps(records, ensure_ascii=False), wantgoo_data, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, ticker_map = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data, ticker_map, etf_name_map = fetch_backend_data_to_json()
     wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
+    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)  # 💡 將 ETF 名稱打包成 JSON 傳給前端
 
     html_template = """
     <!DOCTYPE html>
@@ -569,7 +583,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover align-middle">
                       <thead>
-                        <tr><th>變動 ETF 代號</th><th class="text-end">增減股數</th></tr>
+                        <tr><th>變動 ETF</th><th class="text-end">增減股數</th></tr>
                       </thead>
                       <tbody id="stockDistBody"></tbody>
                     </table>
@@ -583,7 +597,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover align-middle">
                       <thead>
-                        <tr><th>ETF 代號</th><th class="text-end">持股權重占比</th><th class="text-end">持有股數</th></tr>
+                        <tr><th>ETF</th><th class="text-end">持股權重占比</th><th class="text-end">持有股數</th></tr>
                       </thead>
                       <tbody id="stockWeightBody"></tbody>
                     </table>
@@ -625,7 +639,7 @@ def main():
               <div class="table-responsive">
                 <table class="table table-hover table-striped align-middle">
                   <thead>
-                    <tr><th>ETF代號</th><th>成分股</th><th>異動性質</th><th class="text-end">增減股數</th><th>連續買賣狀態</th></tr>
+                    <tr><th>ETF</th><th>成分股</th><th>異動性質</th><th class="text-end">增減股數</th><th>連續買賣狀態</th></tr>
                   </thead>
                   <tbody id="globalTableBody"></tbody>
                 </table>
@@ -700,7 +714,7 @@ def main():
             <div class="card p-3 mb-4 bg-light">
               <div class="row align-items-center g-3">
                 <div class="col-12">
-                  <label class="form-label fw-bold text-secondary mb-2"><i class="bi bi-check2-square me-1"></i>請選擇要比較的 ETF 代號（可多選）</label>
+                  <label class="form-label fw-bold text-secondary mb-2"><i class="bi bi-check2-square me-1"></i>請選擇要比較的 ETF（可多選）</label>
                   <div id="compareEtfCheckboxes" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded" style="max-height: 150px; overflow-y: auto;"></div>
                 </div>
                 <div class="col-md-3 pt-2">
@@ -734,6 +748,7 @@ def main():
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
+        let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; // 💡 注入新版 ETF 名稱映射
         let activeEtf = "";
 
         function switchTab(contentId, tabId) {
@@ -752,6 +767,12 @@ def main():
             initDashboard();
         });
 
+        // 💡 取得清洗後完整呈現標題的輔助函式 (例如: "0050 元大台灣50")
+        function getEtfDisplayLabel(code) {
+            let mappedName = etfNameMappingData[code] || "未知名稱";
+            return `${code} ${mappedName}`;
+        }
+
         function initDashboard() {
             let etfSet = new Set();
             globalRawData.forEach(item => { if(item.etf) etfSet.add(item.etf); });
@@ -759,16 +780,18 @@ def main():
 
             let listHtml = "";
             etfList.forEach(etf => {
-                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn" id="btn-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-file-earmark-text me-2"></i>${etf}</button>`;
+                // 💡 左側側邊欄列表改用新版「名稱」工作表的名稱
+                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn" id="btn-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-file-earmark-text me-2"></i>${getEtfDisplayLabel(etf)}</button>`;
             });
             document.getElementById('etfButtonList').innerHTML = listHtml;
 
             let checkHtml = "";
             etfList.forEach(etf => {
+                // 💡 交叉比對的多選按鈕也同步更新名稱
                 checkHtml += `
                   <div class="form-check form-check-inline me-3 py-1">
                     <input class="form-check-input etf-compare-cb" type="checkbox" value="${etf}" id="cb-${etf}" checked>
-                    <label class="form-check-label fw-bold" for="cb-${etf}">${etf}</label>
+                    <label class="form-check-label fw-bold" for="cb-${etf}">${getEtfDisplayLabel(etf)}</label>
                   </div>`;
             });
             document.getElementById('compareEtfCheckboxes').innerHTML = checkHtml;
@@ -806,7 +829,8 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            let mappedName = tickerMappingData[etfName] || "未知名稱";
+            // 💡 主標題區改抓「名稱」工作表映射
+            let mappedName = etfNameMappingData[etfName] || "未知名稱";
             document.getElementById('txtEtfCode').innerText = etfName;
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
@@ -1037,9 +1061,10 @@ def main():
                     totalDiff += diff;
                     let colorStyle = diff > 0 ? "color:#dc2626;" : "color:#0f766e;";
                     let sign = diff > 0 ? "+" : "";
+                    // 💡 變動明細中的 ETF 欄位套用新版名稱對照
                     changeHtml += `
                         <tr>
-                            <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${etf}</td>
+                            <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${getEtfDisplayLabel(etf)}</td>
                             <td class="text-end fw-bold font-monospace" style="${colorStyle}">${sign}${Math.round(diff).toLocaleString()} 股</td>
                         </tr>`;
                 }
@@ -1072,9 +1097,10 @@ def main():
             if(latestMatches.length === 0) {
                 bodyWeight.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">最新日期外，全市場無 ETF 持有此股。</td></tr>`;
             } else {
+                // 💡 權重明細中的 ETF 欄位套用新版名稱對照
                 bodyWeight.innerHTML = latestMatches.sort((a,b)=>b.volume - a.volume).map(r => `
                     <tr>
-                      <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${r.etf}</td>
+                      <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${getEtfDisplayLabel(r.etf)}</td>
                       <td class="text-end fw-bold text-danger">${Number(r.weight).toFixed(2)}%</td>
                       <td class="text-end text-secondary font-monospace">${Math.round(r.volume).toLocaleString()} 股</td>
                     </tr>
@@ -1108,9 +1134,10 @@ def main():
                     if(diff !== 0) {
                         anyChange = true;
                         let bClass = diff > 0 ? "badge-nature-up" : "badge-nature-down";
+                        // 💡 全市場表格的 ETF 套用新版名稱對照
                         body.innerHTML += `
                           <tr>
-                            <td><small class="fw-bold">${eCode}</small></td>
+                            <td><small class="fw-bold">${getEtfDisplayLabel(eCode)}</small></td>
                             <td><span class="badge bg-light text-dark font-monospace border me-2">${r.stock}</span><b>${r.name}</b></td>
                             <td><span class="${bClass}">${diff > 0 ? '增加' : '減少'}</span></td>
                             <td class="text-end fw-bold font-monospace">${Math.round(diff).toLocaleString()}</td>
@@ -1158,8 +1185,8 @@ def main():
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
 
-            let header = document.getElementById('compareTableHeader');
-            header.innerHTML = `<th>股票代號</th><th>股票名稱</th>` + checkedCbs.map(c => `<th class="text-end" style="min-width:120px;">${c} 權重</th>`).join('');
+            // 💡 交叉比較矩陣表頭的 ETF 套用新版名稱對照
+            header.innerHTML = `<th>股票代號</th><th>股票名稱</th>` + checkedCbs.map(c => `<th class="text-end" style="min-width:140px;">${getEtfDisplayLabel(c)}<br>權重</th>`).join('');
 
             let stockMap = {};
             globalRawData.forEach(r => {
@@ -1184,7 +1211,16 @@ def main():
     </html>
     """
 
-    final_html = html_template.replace("__DATA_PLACEHOLDER__", json_data).replace("__WANTGOO_PLACEHOLDER__", wantgoo_json).replace("__TICKER_PLACEHOLDER__", ticker_json)
+    # 💡 替換新增的 __ETF_NAME_PLACEHOLDER__ 預留位置
+    final_html = html_template.replace(
+        "__DATA_PLACEHOLDER__", json_data
+    ).replace(
+        "__WANTGOO_PLACEHOLDER__", wantgoo_json
+    ).replace(
+        "__TICKER_PLACEHOLDER__", ticker_json
+    ).replace(
+        "__ETF_NAME_PLACEHOLDER__", etf_name_json
+    )
     components.html(final_html, height=1600, scrolling=True)
 
 if __name__ == "__main__":
