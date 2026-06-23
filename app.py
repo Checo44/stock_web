@@ -924,9 +924,18 @@ def main():
 
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-            let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨"];
+            // 擴充過濾關鍵字：加入 RDI、DR_、RECEIVABLES、DIVIDENDS、權證、型購、型售，確保非股票資產完全剔除
+            let cashEx = [
+                "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
+                "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售"
+            ];
             if (meta.includes(code) || meta.includes(name)) return false;
-            if (cashEx.some(k => code.toUpperCase().includes(k) || name.toUpperCase().includes(k))) return false;
+            
+            // 轉大寫進行全字串模糊比對
+            let upperCode = code.toUpperCase();
+            let upperName = name.toUpperCase();
+            if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
+            
             return true;
         }
 
