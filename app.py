@@ -101,7 +101,10 @@ def fetch_ticker_mapping():
 
 @st.cache_data(ttl=300)
 def fetch_etf_name_mapping():
-    """ 採用指定修正邏輯：精確抓取「名稱」工作表建立 ETF 代號與名稱對照 """
+    """ 
+    精確抓取「名稱」工作表建立 ETF 對照
+    邏輯：B欄為ETF代號 (row[1])，C欄為ETF名稱 (row[2])
+    """
     if not sh: return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_ETF_NAME)
@@ -110,9 +113,10 @@ def fetch_etf_name_mapping():
         
         etf_name_map = {}
         for row in raw_etf[1:]:
-            if len(row) >= 2:
-                code = str(row[0]).strip()
-                name = str(row[1]).strip()
+            # 確保資料列長度至少有 3 欄 (A, B, C)，才能安全抓到 C 欄
+            if len(row) >= 3:
+                code = str(row[1]).strip()   # B欄：ETF代號
+                name = str(row[2]).strip()   # C欄：ETF名稱
                 if code: etf_name_map[code] = name
         return etf_name_map, None
     except Exception as e:
@@ -188,7 +192,6 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 若個股無對應代號，則不須清洗、照舊處理，不清空
     if ticker_map:
         mapped_series = df['stock'].map(ticker_map)
         backup_col = orig_name_col if (orig_name_col and orig_name_col in df.columns) else 'name'
@@ -741,7 +744,7 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="compareTableBody">
-                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr>
+                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較']按鈕</td></tr>
                   </tbody>
                 </table>
               </div>
