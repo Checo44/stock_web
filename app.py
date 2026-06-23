@@ -75,6 +75,9 @@ def load_all_sheets_data():
         raw_history = w_history.get_all_records()
         df_hist = pd.DataFrame(raw_history)
         
+        # 【關鍵修正】將讀取到的欄位名稱全部去空格、轉小寫，防止 Google 試算表欄位大小寫或空格不一致導致 KeyError
+        df_hist.columns = df_hist.columns.astype(str).str.strip().str.lower()
+        
         # 2. 讀取代號對照表
         try:
             w_ticker = sh.worksheet(WORKSHEET_TICKER)
@@ -109,7 +112,6 @@ def fetch_twse_live_market(etf_codes):
         # 構造證交所與櫃買中心查詢參數
         param_list = []
         for code in etf_codes:
-            # 台灣大部分熱門ETF在證交所(tse)，少數可能在櫃買(otc)，此處採雙向快配機制或預設 tse
             param_list.append(f"tse_{code}.tw")
             param_list.append(f"otc_{code}.tw")
             
@@ -139,7 +141,6 @@ def fetch_wantgoo_etf_live():
         resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            # 假設結構為 list 或是帶 data 節點，依實際情況解析
             items = data if isinstance(data, list) else data.get("data", [])
             for item in items:
                 id_code = item.get("id") or item.get("code")
@@ -763,9 +764,8 @@ html_template = """
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
-        let selectedTargetStocks = []; // 智能組合篩選已選取公司儲存庫
+        let selectedTargetStocks = []; 
 
-        // 建立一個專屬於從 ETF History 提取出來的合法股票對照表
         let historyStockMapping = {};
 
         function switchTab(contentId, tabId) {
@@ -782,11 +782,9 @@ html_template = """
                 return;
             }
             
-            // 初始化建立來自 ETF History 的合法股票清單
             initHistoryStockMapping();
             initDashboard();
             
-            // 點擊空白處自動關閉模糊搜尋下拉選單
             document.addEventListener('click', function(e) {
                 if(!e.target.closest('.position-relative') && !e.target.closest('#stockInput') && !e.target.closest('#matcherInput')) {
                     document.getElementById('stockSuggestions').style.display = 'none';
@@ -834,12 +832,8 @@ html_template = """
             });
         }
 
-        // ==========================================
-        // 修正：修正過濾邏輯，納入 DR 完整排除
-        // ==========================================
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-            // 加上 DR 排除
             let cashEx = ["DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨", "RDI", "權證", "DR"];
             
             let upperCode = String(code).toUpperCase().trim();
@@ -850,9 +844,6 @@ html_template = """
             return true;
         }
 
-        // ==========================================
-        // 修正：從 ETF History 提取所有合法的成分股作為智能篩選清單
-        // ==========================================
         function initHistoryStockMapping() {
             historyStockMapping = {};
             globalRawData.forEach(item => {
@@ -864,16 +855,12 @@ html_template = """
             });
         }
 
-        // ==========================================
-        // 修正：將搜尋對照表改為 historyStockMapping 
-        // ==========================================
         function searchStockSuggestions(value, boxId, inputId, isMultiple = false) {
             let q = value.trim().toLowerCase();
             let box = document.getElementById(boxId);
             if (!q) { box.style.display = 'none'; return; }
 
             let matches = [];
-            // 改從 historyStockMapping 內搜尋，清單來源與過濾條件即一致
             for (let code in historyStockMapping) {
                 let name = historyStockMapping[code];
                 if (code.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
@@ -998,9 +985,6 @@ html_template = """
             `).join('');
         }
 
-        // ==========================================
-        // 以下維持原有的其餘分析與歷史渲染邏輯
-        // ==========================================
         function selectEtf(etfName) {
             activeEtf = etfName;
             document.querySelectorAll('.etf-item-btn').forEach(b => b.classList.remove('active'));
@@ -1311,15 +1295,11 @@ html_template = """
             if(!anyChange) body.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">此範圍內全市場未發生增減異動</td></tr>';
         }
 
-        function toggleHeatCustomDates() {
-            document.getElementById('heatCustomDateGroup').style.display = (document.getElementById('heatRangeType').value === 'custom') ? 'block' : 'none';
-        }
-
         function loadMarketHeat() {
-            let type = document.getElementById('heatRangeType').value;
+            let type = document.getElementById('globalRangeType').value;
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
-            let compDate = (type === 'custom') ? document.getElementById('heatStartDate').value : dates[Math.max(0, dates.length - 1 - parseInt(type))];
+            let compDate = (type === 'custom') ? document.getElementById('globalStartDate').value : dates[Math.max(0, dates.length - 1 - parseInt(type))];
 
             document.getElementById('heatBuyTitle').innerHTML = `<i class="bi bi-graph-up me-2"></i>跨市場大加總：淨買超前 10 大個股 (${compDate} ~ ${latestDate})`;
             document.getElementById('heatSellTitle').innerHTML = `<i class="bi bi-graph-down me-2"></i>跨市場大加總：淨賣超前 10 大個股 (${compDate} ~ ${latestDate})`;
@@ -1336,8 +1316,8 @@ html_template = """
             let topBuy = [...list].sort((a,b)=>b.diff - a.diff).slice(0, 10);
             let topSell = [...list].sort((a,b)=>a.diff - b.diff).slice(0, 10);
 
-            document.getElementById('heatBuyTableBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-danger fw-bold font-monospace">+${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
-            document.getElementById('heatSellTableBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-teal text-white" style="background-color:#0f766e;">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-success fw-bold font-monospace">${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
+            document.getElementById('heatBuyTableBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white" style="padding: 2px 6px; border-radius: 4px;">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-danger fw-bold font-monospace">+${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
+            document.getElementById('heatSellTableBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-teal text-white" style="background-color:#0f766e; padding: 2px 6px; border-radius: 4px;">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-success fw-bold font-monospace">${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
         }
 
         function generateComparison() {
