@@ -32,7 +32,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "名稱"  
+WORKSHEET_TICKER = "代號"  # 💡 確保對照工作表名稱為「代號」
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -90,10 +90,12 @@ def fetch_ticker_mapping():
             return {}, None
         
         ticker_map = {}
+        # 💡 修改對照邏輯：通常第一列為欄位名稱，從第二列開始讀取
+        # 根據您的需求：對照 A 欄（代號），取得 B 欄（公司名稱）
         for row in raw_ticker[1:]:
-            if len(row) > 2:
-                code = str(row[1]).strip()  # B欄：代號
-                name = str(row[2]).strip()  # C欄：名稱
+            if len(row) >= 2:
+                code = str(row[0]).strip()  # A 欄：股票代號
+                name = str(row[1]).strip()  # B 欄：公司名稱
                 if code:
                     ticker_map[code] = name
         return ticker_map, None
@@ -164,10 +166,11 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 💡 核心變更：全網頁股票與 ETF 名稱清洗對照
+    # 💡 核心修正：對照「代號」工作表，股票代號相同者，一律清洗並對照為 B 欄位的公司名稱
     if ticker_map:
-        df['name'] = df['stock'].apply(lambda x: ticker_map.get(x, ticker_map.get(x.split('.')[0], "")))
-        # 若對照表無此名稱，則沿用原對照或試算表中的原始名稱
+        # 建立清洗對照邏輯：先拿代號去 ticker_map 找
+        df['name'] = df['stock'].apply(lambda x: ticker_map.get(x, ""))
+        # 如果對照表內找不到該代號（例如現金、期貨或特殊項目），則保留原本 History 裡面的原始名稱
         df['name'] = df['name'].replace("", np.nan).fillna(df['成分股名稱' if '成分股名稱' in df.columns else 'name'].astype(str).str.strip())
     else:
         df['name'] = df['name'].astype(str).str.strip()
@@ -717,7 +720,7 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="compareTableBody">
-                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較’鈕</td></tr>
+                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」鈕</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -977,7 +980,6 @@ def main():
 
         function refreshCurrentEtf() { if(activeEtf) selectEtf(activeEtf); }
 
-        // 💡 核心功能：個股籌碼分佈大升級 (支援代號與名稱查詢、每日異動計算)
         function searchStockDistribution() {
             let target = document.getElementById('stockInput').value.trim();
             if(!target) return;
@@ -985,20 +987,16 @@ def main():
             let dates = [...new Set(globalRawData.map(d => d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
             
-            // 取得比較區間
             let offset = parseInt(document.getElementById('stockRangeType').value);
             let compIdx = Math.max(0, dates.length - 1 - offset);
             let compareDate = dates[compIdx];
 
-            // 模糊搜尋支援：可以用代號或名稱找
             let targetCode = target;
             let targetName = target;
             
-            // 如果輸入的是代號，嘗試對照名稱
             if (tickerMappingData[target]) {
                 targetName = tickerMappingData[target];
             } else {
-                // 如果輸入的是名稱，反查代號
                 for (let key in tickerMappingData) {
                     if (tickerMappingData[key] === target) {
                         targetCode = key;
@@ -1007,14 +1005,12 @@ def main():
                 }
             }
 
-            // 1. 最新持股權重分佈 (基準日)
             let latestMatches = globalRawData.filter(d => d.date === latestDate && (d.stock === targetCode || d.name === targetName));
             
             if (latestMatches.length > 0) {
                 targetCode = latestMatches[0].stock;
                 targetName = latestMatches[0].name;
             } else {
-                // 如果基準日沒找到，用全資料庫找對照
                 let anyMatch = globalRawData.find(d => d.stock === targetCode || d.name === targetName);
                 if (anyMatch) {
                     targetCode = anyMatch.stock;
@@ -1022,11 +1018,9 @@ def main():
                 }
             }
 
-            // 更新摘要看板
             document.getElementById('trendStockHeader').innerText = `【 ${targetCode} 】 ${targetName}`;
             document.getElementById('stockRangeBadge').innerText = `對比區間: ${compareDate} ~ ${latestDate}`;
 
-            // 2. 計算區間每日異動狀況明細 (各 ETF 增減)
             let etfList = [...new Set(globalRawData.map(d => d.etf))];
             let changeHtml = "";
             let totalDiff = 0;
@@ -1051,7 +1045,6 @@ def main():
                 }
             });
 
-            // 渲染趨勢圖卡
             document.getElementById('stockTrendCard').style.display = 'block';
             document.getElementById('stockResultCard').style.display = 'block';
             document.getElementById('stockWeightCard').style.display = 'block';
@@ -1072,11 +1065,9 @@ def main():
             totalVolEl.innerText = `${totalSign}${Math.round(totalDiff).toLocaleString()} 股`;
             totalVolEl.className = `fw-bold font-monospace mb-0 ${totalColor}`;
 
-            // 渲染左側變動明細
             let bodyDist = document.getElementById('stockDistBody');
             bodyDist.innerHTML = changeHtml || `<tr><td colspan="2" class="text-center text-muted py-3">此區間內無任何 ETF 增減此個股股數。</td></tr>`;
 
-            // 渲染右側最新權重分佈明細
             let bodyWeight = document.getElementById('stockWeightBody');
             if(latestMatches.length === 0) {
                 bodyWeight.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">最新日期外，全市場無 ETF 持有此股。</td></tr>`;
