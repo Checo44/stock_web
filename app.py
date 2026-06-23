@@ -32,7 +32,7 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "名稱"
+WORKSHEET_TICKER = "名稱"  # 🔍 精確指定對照工作表為「名稱」
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -81,33 +81,21 @@ def fetch_raw_sheet_data():
 
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
-    """讀取代號工作表，精確建立 B 欄 (ETF代號) 對應 C 欄 (ETF名稱) 的字典"""
+    """讀取「名稱」工作表，精確建立 B 欄 (ETF代號) 對應 C 欄 (ETF名稱) 的字典"""
     if not sh:
         return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_TICKER)
         raw_ticker = ws.get_all_values()
-        if not raw_ticker or len(raw_ticker) < 2:
+        if not raw_ticker or len(raw_ticker) < 1:
             return {}, None
         
-        # 由於歷史兼顧多欄位名稱，此處精準抓取對應，或根據固定順序防呆
-        headers = [str(h).strip() for h in raw_ticker[0]]
-        
-        code_idx, name_idx = -1, -1
-        for i, h in enumerate(headers):
-            if h in ["ETF代號", "股票代號", "代號", "Stock Code", "Code"]:
-                code_idx = i
-            if h in ["ETF名稱", "公司名稱", "股票名稱", "名稱", "Name", "Company Name"]:
-                name_idx = i
-                
-        if code_idx == -1: code_idx = 0 # 預設對應 B 欄 (程式中索引0代表第一存在欄)
-        if name_idx == -1: name_idx = 1
-        
         ticker_map = {}
+        # 根據需求：B欄為ETF代號(索引1)，C欄為ETF名稱(索引2)
         for row in raw_ticker[1:]:
-            if len(row) > max(code_idx, name_idx):
-                code = str(row[code_idx]).strip()
-                name = str(row[name_idx]).strip()
+            if len(row) > 2:
+                code = str(row[1]).strip()  # B欄
+                name = str(row[2]).strip()  # C欄
                 if code:
                     ticker_map[code] = name
         return ticker_map, None
@@ -327,7 +315,6 @@ def main():
         .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
         .badge-trend-sell { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #fde68a; }
         
-        /* 🆕 ETF 頂部標題文字樣式 */
         .etf-title-display {
           font-size: 1.5rem;
           font-weight: 700;
@@ -629,7 +616,7 @@ def main():
                         <tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr>
                       </thead>
                       <tbody id="heatSellTableBody">
-                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr>
+                        <tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析`」載入數據</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -677,7 +664,7 @@ def main():
       <script>
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
-        let tickerMappingData = __TICKER_PLACEHOLDER__; // 載入代號名稱對照字典
+        let tickerMappingData = __TICKER_PLACEHOLDER__; 
         let activeEtf = "";
 
         document.addEventListener("DOMContentLoaded", function() {
@@ -743,13 +730,12 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            // 🆕 顯示頂部的股票代號與對照出的 ETF名稱
+            // 顯示頂部的股票代號與對照出的 ETF名稱
             let mappedName = tickerMappingData[etfName] || "未知名稱";
             document.getElementById('txtEtfCode').innerText = etfName;
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
 
-            // 🛠️ 比對並抓取玩股網即時大表數據
             let liveData = wantgooMarketData[etfName] || null;
 
             if (liveData) {
@@ -769,7 +755,6 @@ def main():
                 document.getElementById('metaVolume').innerText = "-";
             }
 
-            // 規模維持讀取歷史試算表記錄
             let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
             document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
