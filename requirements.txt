@@ -5,3 +5,4 @@ gspread>=5.10.0
 google-auth>=2.20.0
 requests>=2.31.0
 playwright>=1.40.0
+beautifulsoup4
