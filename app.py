@@ -191,20 +191,22 @@ def fetch_twse_live_data(etf_list):
 @st.cache_data(ttl=300)
 def fetch_pocket_etf_data(etf_list):
     """
-    使用 Playwright 動態爬取口袋證券的規模、最新淨值與折溢價
+    使用 Playwright 精準解析口袋證券 ETF 的資產規模、最新淨值與折溢價
     """
     pocket_data = {}
     if not etf_list:
         return pocket_data
         
-    import re
     from playwright.sync_api import sync_playwright
     
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+                locale="zh-TW",
+                timezone_id="Asia/Taipei"
             )
             
             for etf in etf_list:
@@ -217,40 +219,53 @@ def fetch_pocket_etf_data(etf_list):
                 
                 try:
                     page.goto(url, timeout=15000)
-                    page.wait_for_selector("text=資產規模", timeout=10000)
+                    # 給予 SPA 網頁足夠的數據加載與 DOM 渲染時間
+                    page.wait_for_timeout(4000)
                     
-                    body_text = page.locator("body").inner_text()
-                    
-                    # 1. 抓取資產規模
-                    size_match = re.search(r"資產規模\(億\)\s*[:：]\s*([\d\.,]+)", body_text)
-                    size = size_match.group(1) if size_match else "-"
-                    
-                    # 2. 透過表格列抓取最新的淨值與折溢價
-                    nav = "-"
-                    premium = "-"
-                    
-                    rows = page.locator("table tr").all()
-                    for row in rows:
-                        cells = row.locator("td").all_inner_texts()
-                        if len(cells) >= 4:
-                            date_text = cells[0].strip()
-                            if re.match(r"^\d{4}[/\-]\d{2}[/\-]\d{2}$", date_text):
-                                nav = cells[2].strip()
-                                premium = cells[3].strip()
-                                break
-                                
-                    # 如果表格解析失敗，使用純文字正則備用方案
-                    if nav == "-" or premium == "-":
-                        row_match = re.search(r"(\d{4}[/\-]\d{2}[/\-]\d{2})\s+([\d\.,]+)\s+([\d\.,]+)\s+([\d\.,\-]+)", body_text)
-                        if row_match:
-                            nav = row_match.group(3)
-                            premium = row_match.group(4)
+                    # 執行頁面內核 JavaScript 進行高韌性的結構清洗
+                    scraped_result = page.evaluate("""
+                        () => {
+                            let size = "-";
+                            let nav = "-";
+                            let premium = "-";
                             
-                    pocket_data[etf_clean] = {
-                        "nav": nav,
-                        "premium": premium,
-                        "size": size
-                    }
+                            // 1. 提取資產規模
+                            const bodyText = document.body.innerText;
+                            const sizeMatch = bodyText.match(/(?:資產規模|規模)[^\\d]*([\\d\\.,]+)\\s*億?/);
+                            if (sizeMatch) {
+                                size = sizeMatch[1];
+                            }
+                            
+                            // 2. 自動識別歷史表格的欄位索引 (防止官方改版欄位對調)
+                            const thElements = Array.from(document.querySelectorAll('table th, table tr:first-child td')).map(el => el.innerText.trim());
+                            let dateIdx = 0, navIdx = 2, premIdx = 3; // 預設安全值
+                            
+                            thElements.forEach((th, idx) => {
+                                if (th.includes("日期")) dateIdx = idx;
+                                if (th.includes("淨值")) navIdx = idx;
+                                if (th.includes("折溢價")) premIdx = idx;
+                            });
+                            
+                            // 3. 遍歷表格提取最新一筆有效的歷史紀錄
+                            const rows = Array.from(document.querySelectorAll('table tr'));
+                            for (let row of rows) {
+                                const tds = Array.from(row.querySelectorAll('td')).map(el => el.innerText.trim());
+                                if (tds.length > Math.max(dateIdx, navIdx, premIdx)) {
+                                    const dateStr = tds[dateIdx];
+                                    // 驗證是否為日期格式開頭
+                                    if (/^\\d{4}/.test(dateStr) || /^\\d{2}\\/\\d{2}/.test(dateStr)) {
+                                        nav = tds[navIdx] || "-";
+                                        premium = tds[premIdx] || "-";
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            return { size, nav, premium };
+                        }
+                    """)
+                    
+                    pocket_data[etf_clean] = scraped_result
                 except Exception as e:
                     print(f"讀取口袋證券 ETF {etf_clean} 失敗: {e}")
                     pocket_data[etf_clean] = {"nav": "-", "premium": "-", "size": "-"}
@@ -821,7 +836,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -971,17 +986,17 @@ def main():
                 setMetaFallback();
             }
 
-            // 讀取 Pocket Playwright 抓取的動態整合資料
+            // 讀取由 Playwright 後端傳入的精準口袋證券即時盤態
             let pocketData = pocketMarketData[etfName] || null;
 
-            // 填入 淨值 欄位
+            // 1. 填入 淨值 資訊卡片
             if (pocketData && pocketData.nav && pocketData.nav !== "-") {
                 document.getElementById('metaNav').innerText = pocketData.nav;
             } else {
                 document.getElementById('metaNav').innerText = "-";
             }
 
-            // 填入 折溢價 欄位
+            // 2. 填入 折溢價 資訊卡片 (優先讀取 Pocket，備用讀取玩股網或資料庫)
             if (pocketData && pocketData.premium && pocketData.premium !== "-") {
                 let premText = pocketData.premium;
                 if (!premText.includes("%")) premText += "%";
@@ -995,7 +1010,7 @@ def main():
                 }
             }
 
-            // 填入 規模 欄位
+            // 3. 填入 資產規模 資訊卡片
             if (pocketData && pocketData.size && pocketData.size !== "-") {
                 let sizeText = pocketData.size;
                 if (!sizeText.includes("億")) sizeText += " 億";
