@@ -32,8 +32,8 @@ st.markdown("""
 
 SHEET_NAME = "ETF daily"
 WORKSHEET_HISTORY = "ETF History"
-WORKSHEET_TICKER = "代號"      # 💡 個股代號對照
-WORKSHEET_ETF_NAME = "名稱"    # 💡 ETF名稱對照
+WORKSHEET_TICKER = "代號"      # 個股代號對照
+WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -82,7 +82,7 @@ def fetch_raw_sheet_data():
 
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
-    """ 💡 抓取個股名稱對照表 (代號工作表：A欄代號 -> B欄公司名稱) """
+    """ 抓取個股名稱對照表 (代號工作表：A欄代號 -> B欄公司名稱) """
     if not sh: return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_TICKER)
@@ -101,7 +101,7 @@ def fetch_ticker_mapping():
 
 @st.cache_data(ttl=300)
 def fetch_etf_name_mapping():
-    """ 💡 抓取 ETF 名稱對照表 (名稱工作表：A欄ETF代號 -> B欄ETF名稱) """
+    """ 抓取 ETF 名稱對照表 (名稱工作表：A欄ETF代號 -> B欄ETF名稱) """
     if not sh: return {}, "無法連線至 Google 試算表"
     try:
         ws = sh.worksheet(WORKSHEET_ETF_NAME)
@@ -165,6 +165,13 @@ def process_and_standardize(raw_data, ticker_map=None):
                 rename_dict[alias] = standard
                 break
                 
+    # 在對照更名前，先保留原始的成分股名稱欄位名稱，供找不到代號時退回使用
+    orig_name_col = None
+    for alias in alias_map["name"]:
+        if alias in df.columns:
+            orig_name_col = alias
+            break
+
     df = df.rename(columns=rename_dict)
     
     missing = [k for k in ["etf", "date", "stock", "weight", "volume"] if k not in df.columns]
@@ -182,10 +189,13 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 💡 核心修正：個股邏輯不變，對照「代號」工作表
+    # 💡 修正 1：若個股無對應代號，則不須清洗、照舊處理，不清空
     if ticker_map:
-        df['name'] = df['stock'].apply(lambda x: ticker_map.get(x, ""))
-        df['name'] = df['name'].replace("", np.nan).fillna(df['成分股名稱' if '成分股名稱' in df.columns else 'name'].astype(str).str.strip())
+        # 先以對照表轉換，若找不到則映射為 None / NaN
+        mapped_series = df['stock'].map(ticker_map)
+        # 如果對照表內找不到，則填補原本原始資料中的成分股名稱欄位 (若欄位存在) 或者是更名後的 'name' 欄位
+        backup_col = orig_name_col if (orig_name_col and orig_name_col in df.columns) else 'name'
+        df['name'] = mapped_series.fillna(df[backup_col].astype(str).str.strip())
     else:
         df['name'] = df['name'].astype(str).str.strip()
         
@@ -199,7 +209,7 @@ def fetch_backend_data_to_json():
     if err_msg: return "[]", {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
-    etf_name_map, _ = fetch_etf_name_mapping()  # 💡 載入全新 ETF 名稱映射
+    etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
     if clean_err or df.empty: return "[]", {}, {}, {}
@@ -215,7 +225,7 @@ def main():
     json_data, wantgoo_market_data, ticker_map, etf_name_map = fetch_backend_data_to_json()
     wantgoo_json = json.dumps(wantgoo_market_data, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
-    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)  # 💡 將 ETF 名稱打包成 JSON 傳給前端
+    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -734,7 +744,7 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="compareTableBody">
-                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」鈕</td></tr>
+                    <tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較’鈕</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -748,7 +758,7 @@ def main():
         let globalRawData = __DATA_PLACEHOLDER__;
         let wantgooMarketData = __WANTGOO_PLACEHOLDER__; 
         let tickerMappingData = __TICKER_PLACEHOLDER__; 
-        let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; // 💡 注入新版 ETF 名稱映射
+        let etfNameMappingData = __ETF_NAME_PLACEHOLDER__; 
         let activeEtf = "";
 
         function switchTab(contentId, tabId) {
@@ -767,7 +777,6 @@ def main():
             initDashboard();
         });
 
-        // 💡 取得清洗後完整呈現標題的輔助函式 (例如: "0050 元大台灣50")
         function getEtfDisplayLabel(code) {
             let mappedName = etfNameMappingData[code] || "未知名稱";
             return `${code} ${mappedName}`;
@@ -780,14 +789,12 @@ def main():
 
             let listHtml = "";
             etfList.forEach(etf => {
-                // 💡 左側側邊欄列表改用新版「名稱」工作表的名稱
                 listHtml += `<button class="list-group-item list-group-item-action etf-item-btn" id="btn-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-file-earmark-text me-2"></i>${getEtfDisplayLabel(etf)}</button>`;
             });
             document.getElementById('etfButtonList').innerHTML = listHtml;
 
             let checkHtml = "";
             etfList.forEach(etf => {
-                // 💡 交叉比對的多選按鈕也同步更新名稱
                 checkHtml += `
                   <div class="form-check form-check-inline me-3 py-1">
                     <input class="form-check-input etf-compare-cb" type="checkbox" value="${etf}" id="cb-${etf}" checked>
@@ -829,7 +836,6 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            // 💡 主標題區改抓「名稱」工作表映射
             let mappedName = etfNameMappingData[etfName] || "未知名稱";
             document.getElementById('txtEtfCode').innerText = etfName;
             document.getElementById('txtEtfName').innerText = mappedName;
@@ -1061,7 +1067,6 @@ def main():
                     totalDiff += diff;
                     let colorStyle = diff > 0 ? "color:#dc2626;" : "color:#0f766e;";
                     let sign = diff > 0 ? "+" : "";
-                    // 💡 變動明細中的 ETF 欄位套用新版名稱對照
                     changeHtml += `
                         <tr>
                             <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${getEtfDisplayLabel(etf)}</td>
@@ -1097,7 +1102,6 @@ def main():
             if(latestMatches.length === 0) {
                 bodyWeight.innerHTML = `<tr><td colspan="3" class="text-center text-muted py-3">最新日期外，全市場無 ETF 持有此股。</td></tr>`;
             } else {
-                // 💡 權重明細中的 ETF 欄位套用新版名稱對照
                 bodyWeight.innerHTML = latestMatches.sort((a,b)=>b.volume - a.volume).map(r => `
                     <tr>
                       <td class="fw-bold text-primary"><i class="bi bi-collection me-2"></i>${getEtfDisplayLabel(r.etf)}</td>
@@ -1108,7 +1112,7 @@ def main():
             }
         }
 
-        function toggleGlobalCustomDates() {
+        function toggleGlobalChanges() {
             document.getElementById('globalCustomDateGroup').style.display = (document.getElementById('globalRangeType').value === 'custom') ? 'block' : 'none';
         }
 
@@ -1134,7 +1138,6 @@ def main():
                     if(diff !== 0) {
                         anyChange = true;
                         let bClass = diff > 0 ? "badge-nature-up" : "badge-nature-down";
-                        // 💡 全市場表格的 ETF 套用新版名稱對照
                         body.innerHTML += `
                           <tr>
                             <td><small class="fw-bold">${getEtfDisplayLabel(eCode)}</small></td>
@@ -1185,7 +1188,7 @@ def main():
             let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
             let latestDate = dates[dates.length - 1];
 
-            // 💡 交叉比較矩陣表頭的 ETF 套用新版名稱對照
+            let header = document.getElementById('compareTableHeader');
             header.innerHTML = `<th>股票代號</th><th>股票名稱</th>` + checkedCbs.map(c => `<th class="text-end" style="min-width:140px;">${getEtfDisplayLabel(c)}<br>權重</th>`).join('');
 
             let stockMap = {};
@@ -1211,7 +1214,6 @@ def main():
     </html>
     """
 
-    # 💡 替換新增的 __ETF_NAME_PLACEHOLDER__ 預留位置
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
