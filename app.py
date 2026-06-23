@@ -176,32 +176,63 @@ def fetch_wantgoo_etf_data_via_playwright(etf_filter_list):
     return {}
 
 # 同時支援 tse 與 otc 查詢
-def fetch_twse_live_data(etf_list):
-    if not etf_list:
-        return {}
+def fetch_wantgoo_etf_data():
+    # 延遲匯入，確保 Streamlit 啟動時不會因為環境問題直接崩潰
+    from playwright.sync_api import sync_playwright
     
-    valid_etfs = []
-    for code in etf_list:
-        c_clean = str(code).strip()
-        if c_clean and (c_clean.isdigit() or len(c_clean) >= 4):
-            valid_etfs.append(c_clean)
-
-    if not valid_etfs:
-        return {}
-
-    twse_market_data = {}
+    market_data = {}
+    # 這是你平常在瀏覽器輸入的網址（不需要隱藏的 API URL）
+    target_url = "https://www.wantgoo.com/stock/etf/net-value"
     
-    ch_elements = []
-    for code in valid_etfs:
-        ch_elements.append(f"tse_{code}.tw")
-        ch_elements.append(f"otc_{code}.tw")
-        
-    ch_param = "|".join(ch_elements)
-    api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://mis.twse.com.tw/"
-    }
+    try:
+        with sync_playwright() as p:
+            # 啟動無頭瀏覽器（不顯示視窗）
+            browser = p.chromium.launch(headless=True)
+            # 模擬真實使用者的 User-Agent 與視窗大小，防範防爬蟲機制
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
+            page = context.new_page()
+
+            # 定義攔截回應的內部輔助函式
+            def handle_response(response):
+                # 只要發現背景請求的網址中包含了玩股網折溢價 API 的關鍵字
+                if "nav-and-discount-premium" in response.url:
+                    try:
+                        # 直接截獲該請求返回的 JSON 資料
+                        res_json = response.json()
+                        
+                        # 保持你原本完全不變的解析與比對邏輯
+                        for item in res_json:
+                            stock_no = str(item.get("stockNo", "")).strip()
+                            if stock_no:
+                                market_data[stock_no] = {
+                                    "price": item.get("price", "-"),
+                                    "change": item.get("changeValue", "-"), 
+                                    "premium": item.get("discountPremiumRate", "-"), 
+                                    "volume": item.get("volume", "-") 
+                                }
+                    except Exception as parse_err:
+                        # 避免非 JSON 回應或解析失敗導致中斷
+                        pass
+
+            # 【關鍵】綁定監聽器：當瀏覽器收到任何網路回應時，自動執行 handle_response
+            page.on("response", handle_response)
+
+            # 前往目的地網頁。這時網頁內的 JavaScript 會自動發送 API 請求，進而觸發 handle_response 攔截
+            page.goto(target_url, timeout=30000, wait_until="domcontentloaded")
+            
+            # 強制等待 5 秒鐘，確保網頁所有的動態 JS 腳本都執行完畢、網路請求全部發送並接收完成
+            page.wait_for_timeout(5000)
+            
+            browser.close()
+            
+        return market_data
+
+    except Exception as e:
+        print(f"玩股網 Playwright 攔截異常: {e}")
+        return {}
     try:
         res = requests.get(api_url, headers=headers, timeout=10)
         if res.status_code == 200:
