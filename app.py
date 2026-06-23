@@ -708,12 +708,12 @@ def main():
           <div class="custom-tab-content" id="content-f">
             <div class="card p-4 mb-4">
               <h5 class="fw-bold text-primary mb-3"><i class="bi bi-ui-checks-grid me-2"></i>依多檔成分股公司 ➔ 逆向精準篩選適合的 ETF</h5>
-              <p class="text-muted small">請輸入您想要投資的核心公司（可連續新增多檔），系統將即時為您篩選出「同時具備」這些公司的台股精選 ETF 陣容。</p>
+              <p class="text-muted small">請輸入您想要投資的核心公司（支援全球股市、可連續新增多檔），系統將即時為您篩選出「同時具備」這些公司的精選 ETF 陣容。</p>
               
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-5" style="position: relative;">
-                  <label class="form-label fw-bold text-secondary">請輸入個股名稱或代號（支援模糊搜尋）</label>
-                  <input type="text" id="matcherInput" class="form-control" placeholder="例如: 台積電、聯發科、鴻海..." onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
+                  <label class="form-label fw-bold text-secondary">請輸入個股名稱或代號（支援全球股市模糊搜尋）</label>
+                  <input type="text" id="matcherInput" class="form-control" placeholder="例如: 台積電、2330、AAPL、NVDA..." onkeyup="searchStockSuggestions(this.value, 'matcherSuggestions', 'matcherInput', true)">
                   <div id="matcherSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-12 mt-3">
@@ -818,7 +818,7 @@ def main():
                   <div class="table-responsive">
                     <table class="table table-hover table-striped align-middle">
                       <thead><tr><th>排名</th><th>股票代號</th><th>股票名稱</th><th class="text-end">跨市場淨減持(股)</th></tr></thead>
-                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析」載入數據</td></tr></tbody>
+                      <tbody id="heatSellTableBody"><tr><td colspan="4" class="text-center text-muted py-4">請點擊「生成市場熱度分析']載入數據</td></tr></tbody>
                     </table>
                   </div>
                 </div>
@@ -841,7 +841,7 @@ def main():
               <div class="table-responsive">
                 <table class="table table-hover table-striped align-middle">
                   <thead><tr id="compareTableHeader"><th>股票代號</th><th>股票名稱</th></tr></thead>
-                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較']按鈕</td></tr></tbody>
+                  <tbody id="compareTableBody"><tr><td colspan="2" class="text-center text-muted py-4">請先勾選上方 ETF 並點擊「開始交叉比較」按鈕</td></tr></tbody>
                 </table>
               </div>
             </div>
@@ -1395,6 +1395,7 @@ def main():
 
             let agg = {};
             globalRawData.forEach(r => {
+                // 修正點 1：導入核心 normal stock 檢驗機制，踢除非股票資產與指標數據
                 if(!isNormalStock(r.stock, r.name)) return;
                 if(!agg[r.stock]) agg[r.stock] = { code: r.stock, name: r.name, nVol: 0, oVol: 0 };
                 if(r.date === latestDate) agg[r.stock].nVol += Number(r.volume);
