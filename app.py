@@ -6,6 +6,7 @@ import gspread
 import json
 import os
 import requests
+from playwright.sync_api import sync_playwright
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -117,60 +118,39 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組 (已全面改為 Requests API 輕量化型態)
+# 3. 外部即時行情 API 整合模組
 # ==========================================
 def fetch_pocket_etf_data(etf_list):
     """
-    全面移除 Playwright 瀏覽器模擬，直接透過 API 請求 Pocket.tw 數據
-    這能根除 Streamlit 上的環境崩潰錯誤並提升 100 倍運行效率。
+    僅爬取 Pocket.tw 的 ETF 最新「淨值」數據
+    對應提供表格結構的 cells[2]
     """
     results = {}
-    if not etf_list:
-        return results
-        
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://www.pocket.tw/"
-    }
-
-    for code in etf_list:
-        code_clean = str(code).strip()
-        try:
-            # Pocket.tw 後端折溢價動態數據的真正 API 節點
-            api_url = f"https://api.pocket.tw/api/v1/etf/tw/{code_clean}/discountpremium"
-            res = requests.get(api_url, headers=headers, timeout=10)
-            
-            if res.status_code == 200:
-                res_data = res.json()
-                # 取得回傳內容主體
-                data_body = res_data.get("data", {})
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        for code in etf_list:
+            try:
+                url = f"https://www.pocket.tw/etf/tw/{code}/discountpremium"
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
-                # 提取資產規模 (億)
-                size = data_body.get("asset_size", "-")
-                if size != "-":
-                    try:
-                        size = f"{float(size):.2f}"
-                    except:
-                        pass
-                
-                # 提取最新一筆的淨值與折溢價
-                history_list = data_body.get("list", [])
+                # 抓取表格中第二行（最新一日）的資料
+                table = page.locator("table").first
+                rows = table.locator("tr")
                 nav = "-"
-                premium = "-"
-                if history_list and len(history_list) > 0:
-                    latest_record = history_list[0] # 通常第一筆為最新數據
-                    nav = str(latest_record.get("net_value", "-"))
-                    premium = str(latest_record.get("premium_rate", "-"))
                 
-                results[code_clean] = {"size": size, "nav": nav, "premium": premium}
-            else:
-                # 若 Pocket 新版 API 結構不合，提供預防性退路
-                results[code_clean] = {"size": "-", "nav": "-", "premium": "-"}
-        except Exception as e:
-            # 發生任何例外時不中斷程式碼，紀錄備用標記
-            results[code_clean] = {"size": "-", "nav": "-", "premium": "-"}
-            print(f"[{code_clean}] Pocket API 獲取失敗: {e}")
-            
+                if rows.count() > 1:
+                    cells = rows.nth(1).locator("td").all_inner_texts()
+                    # 根據表格結構：[0]日期, [1]收盤價, [2]淨值, [3]折溢價%
+                    if len(cells) >= 3:
+                        nav = cells[2].strip()
+                
+                results[code] = {"nav": nav}
+                page.close()
+            except Exception as e:
+                print(f"[{code}] 淨值爬取失敗: {e}")
+                results[code] = {"nav": "-"}
+        browser.close()
     return results
 
 def fetch_twse_live_data(etf_list):
@@ -285,11 +265,11 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    # 這裡現在呼叫的是高效安全的全新 Requests API 版本
-    pocket_data = fetch_pocket_etf_data(all_etfs)
+    # 呼叫更新後的 Pocket 爬蟲（只留 nav 數據）
+    pocket_market_data = fetch_pocket_etf_data(all_etfs)
     
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), pocket_data, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), pocket_market_data, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
 # 5. 主渲染邏輯
@@ -518,9 +498,9 @@ def main():
                     </div>
                   </div>
                   <div class="col-6 col-md">
-                    <div class="meta-card" style="border-left-color: #319795;">
-                      <div class="meta-label">折溢價</div>
-                      <div class="meta-value" id="metaPremium">-%</div>
+                    <div class="meta-card" style="border-left-color: #48bb78;">
+                      <div class="meta-label">淨值</div>
+                      <div class="meta-value" id="metaNav">-</div>
                     </div>
                   </div>
                   <div class="col-6 col-md">
@@ -554,7 +534,7 @@ def main():
                   
                   <div class="col-lg-5">
                     <div class="card">
-                      <div class="card-header text-secondary"><i class="bi bi-cash-coin me-2"></i>非股票 assets 項目</div>
+                      <div class="card-header text-secondary"><i class="bi bi-cash-coin me-2"></i>非股票資產項目</div>
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
@@ -918,25 +898,22 @@ def main():
                 setMetaFallback();
             }
 
+            // 讀取從 Pocket 爬回來的最新一日「淨值」
             let liveData = pocketMarketData[etfName] || null;
-            if (liveData && liveData.premium !== "-") {
-                document.getElementById('metaPremium').innerText = liveData.premium + "%";
+            if (liveData && liveData.nav) {
+                document.getElementById('metaNav').innerText = liveData.nav;
             } else {
-                let fallbackPrem = latestRows.find(r => r.stock === "折溢價")?.volume || "-";
-                document.getElementById('metaPremium').innerText = fallbackPrem !== "-" ? fallbackPrem + "%" : "-%";
+                // 若爬取失敗，尋找 Google 試算表中有無可能暫存的淨值欄位
+                document.getElementById('metaNav').innerText = (latestRows.find(r => r.stock === "淨值")?.volume || "-");
             }
 
-            if (liveData && liveData.size !== "-") {
-                document.getElementById('metaSize').innerText = liveData.size + " 億";
-            } else {
-                let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
-                document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
-            }
+            let sizeVal = latestRows.find(r => r.stock === "規模")?.volume;
+            document.getElementById('metaSize').innerText = sizeVal ? (Number(sizeVal)/100000000).toFixed(1) + " 億" : "-";
 
             document.getElementById('metaContainer').style.display = 'flex';
 
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
-            let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價"].includes(r.stock));
+            let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name) && !["昨收價","漲跌","市價","規模","折溢價","淨值"].includes(r.stock));
 
             document.getElementById('stockTableBody').innerHTML = stocks.map(r => `
                 <tr>
@@ -1146,7 +1123,7 @@ def main():
             trendStatusEl.innerHTML = totalDiff > 0 ? `<span class="badge bg-danger">🔥 淨加碼</span>` : (totalDiff < 0 ? `<span class="badge bg-success">📉 淨減持</span>` : `<span class="badge bg-secondary">持平</span>`);
             
             let totalVolEl = document.getElementById('trendStockTotalVol');
-            let totalVolVol = `${totalDiff > 0 ? '+' : ''}${Math.round(totalDiff).toLocaleString()} 股`;
+            totalVolVol = `${totalDiff > 0 ? '+' : ''}${Math.round(totalDiff).toLocaleString()} 股`;
             totalVolEl.innerText = totalVolVol;
             totalVolEl.className = `fw-bold font-monospace mb-0 ${totalDiff > 0 ? 'text-danger' : 'text-success'}`;
 
