@@ -895,8 +895,6 @@ def main():
         let activeEtf = "";
         let selectedTargetStocks = []; 
 
-        
-
         function switchTab(contentId, tabId) {
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-tabs .nav-link').forEach(el => el.classList.remove('active'));
