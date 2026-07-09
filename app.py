@@ -970,6 +970,11 @@ def main():
             let upperName = name.toUpperCase();
             if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
             
+            // --- 新增：過濾台灣普通公司債 (B開頭 + 5碼英數字，總長度固定為 6) ---
+            if (/^B[A-Z0-9]{5}$/.test(upperCode)) {
+                return false;
+            }
+            
             return true;
         }
 
@@ -1044,7 +1049,7 @@ def main():
             let badge = document.getElementById('matchedCountBadge');
             
             if (selectedTargetStocks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">請先在上方新增目標公司，系統將自動進行大數據分析。</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">請先在上方新增目標公司，系統將自動進行大數據 analysis。</td></tr>';
                 badge.innerText = "共 0 檔符合";
                 return;
             }
