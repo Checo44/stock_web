@@ -970,8 +970,8 @@ def main():
             let upperName = name.toUpperCase();
             if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
             
-            // --- 新增：過濾台灣普通公司債 (B開頭 + 5碼英數字，總長度固定為 6) ---
-            if (/^B[A-Z0-9]{5}$/.test(upperCode)) {
+            // --- 新增：過濾台灣普通公司債 (G, B, A, H, F 開頭 + 5碼英數字，總長度固定為 6) ---
+            if (/^[GBAHF][A-Z0-9]{5}$/.test(upperCode)) {
                 return false;
             }
             
