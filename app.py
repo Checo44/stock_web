@@ -1372,7 +1372,6 @@ def main():
     )
 
     # 符合 Streamlit 2026 最新規範，將已被棄用的 st.components.v1.html 升級替換為新版專用的 st.iframe 
-    st.iframe(final_html, height=1200, scrolling=True)
-
+    components.html(final_html, height=1200, scrolling=True)
 if __name__ == "__main__":
     main()
