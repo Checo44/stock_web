@@ -108,7 +108,6 @@ def fetch_ticker_mapping():
                 code = str(row[code_idx]).strip()
                 name = str(row[name_idx]).strip()
                 if code: 
-                    # 若對照表的代號為純英文，自動補上空格與 US 國碼
                     if code.isalpha():
                         code = f"{code} US"
                     ticker_map[code] = name
@@ -218,7 +217,6 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 過濾出歷史紀錄中所有「純英文」的股票代號，自動補上空格與 US 國碼
     is_pure_english = df['stock'].str.match(r'^[A-Za-z]+$')
     df.loc[is_pure_english, 'stock'] = df.loc[is_pure_english, 'stock'] + ' US'
     
@@ -415,7 +413,6 @@ def main():
           background-color: #fff !important;
         }
 
-        /* 👑 市場熱度排行專用精緻獎牌與進度條樣式 */
         .rank-medal {
           display: inline-flex;
           align-items: center;
@@ -444,7 +441,6 @@ def main():
           overflow: hidden;
         }
 
-        /* 🌟 新增：交叉比較專用熱力圖與卡片美化樣式 (Option A, B & 構想 A) */
         .weight-high { background-color: #1e3c72 !important; color: #ffffff !important; font-weight: 700 !important; font-size: 1.05rem !important; }
         .weight-med { background-color: #bcd2ee !important; color: #1e3c72 !important; font-weight: 700 !important; }
         .weight-low { background-color: #e6f2ff !important; color: #2a5298 !important; font-weight: 600 !important; }
@@ -565,7 +561,7 @@ def main():
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
-                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th class="text-end">最新持股(股)</th></tr>
+                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th>最新持股(股)</th></tr>
                           </thead>
                           <tbody id="stockTableBody"></tbody>
                         </table>
@@ -579,7 +575,7 @@ def main():
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
-                            <tr><th>資產代號</th><th>資產項目</th><th class="text-end">權重</th><th class="text-end">資產價值(股)</th></tr>
+                            <tr><th>資產代號</th><th>資產項目</th><th class="text-end">權重</th><th>資產價值(股)</th></tr>
                           </thead>
                           <tbody id="assetTableBody"></tbody>
                         </table>
@@ -618,7 +614,7 @@ def main():
                 </div>
                 
                 <div class="card">
-                  <div class="card-header text-dark bg-white"><i class="bi bi-arrow-left-right me-2 text-primary"></i>成分股經理人籌碼異動異動明細</div>
+                  <div class="card-header text-dark bg-white"><i class="bi bi-arrow-left-right me-2 text-primary"></i>成分股經理人籌碼異動明細</div>
                   <div class="table-responsive">
                     <table class="table table-hover align-middle">
                       <thead>
@@ -856,13 +852,11 @@ def main():
               <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer"></div>
             </div>
             
-            <!-- 👑 頂部摘要面板（卡片式 - Option B） -->
             <div id="compareSummarySection" style="display: none;" class="mb-4">
               <div class="fw-bold text-secondary mb-2"><i class="bi bi-lightning-charge-fill text-warning me-1"></i>交叉比對核心摘要（Top 3 重疊焦點個股）</div>
               <div class="row g-3" id="compareSummaryCards"></div>
             </div>
 
-            <!-- 👑 表格分組優化（拆分核心與特色持股矩陣 - Option C / 構想 C） -->
             <div class="card mb-4" id="coreHoldingsCard" style="display: none;">
               <div class="card-header bg-white text-primary fw-bold d-flex align-items-center">
                 <i class="bi bi-shield-heart-fill me-2 text-danger"></i>【英雄所見略同】共同核心持股矩陣（選定之 ETF 皆全數持有）
@@ -923,16 +917,23 @@ def main():
             document.getElementById(tabId).classList.add('active');
         }
 
+        // 👑 修正優化 1：放寬 isNormalStock 過濾邏輯，不再將空字串當作判定黑名單，避免中斷連續天數計算
         function isNormalStock(code, name) {
-            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
+            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL"];
+            if (!code || code.trim() === "") return false;
+            
+            let cleanCode = code.trim();
+            let cleanName = name ? name.trim() : "";
+            
+            if (meta.includes(cleanCode) || (cleanName && meta.includes(cleanName))) return false;
+            
             let cashEx = [
                 "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
                 "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售","買權","賣權","TWSE"
             ];
-            if (meta.includes(code) || meta.includes(name)) return false;
             
-            let upperCode = code.toUpperCase();
-            let upperName = name.toUpperCase();
+            let upperCode = cleanCode.toUpperCase();
+            let upperName = cleanName.toUpperCase();
             if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
             
             if (/^[GBAHF][A-Z0-9]{5}$/.test(upperCode)) {
@@ -1050,14 +1051,15 @@ def main():
             calculateChipsDelta(etfName, sortedDates);
         }
 
+        // 👑 修正優化 2 & 3：深度重構連續動向算法（基準日動態對位、並降低連續天數判定門檻捕捉首日變動）
         function calculateChipsDelta(etfName, sortedDates) {
             let type = document.getElementById('rangeType').value;
             let dOld = null, dNew = null;
             let etfData = globalRawData.filter(d => d.etf === etfName);
 
             if (type === 'custom') {
-                document.getElementById('startDateInput').value = sortedDates[sortedDates.length - 2];
-                document.getElementById('endDateInput').value = sortedDates[sortedDates.length - 1];
+                dOld = document.getElementById('startDateInput').value;
+                dNew = document.getElementById('endDateInput').value;
             } else {
                 let offset = parseInt(type);
                 if (sortedDates.length > offset) {
@@ -1074,25 +1076,49 @@ def main():
             let rowsOld = etfData.filter(d => d.date === dOld);
             let rowsNew = etfData.filter(d => d.date === dNew);
 
+            // 動態取得當前選定新日期（dNew）在歷史時間軸中的正確陣列索引位置
+            let idxNew = sortedDates.indexOf(dNew);
+            if (idxNew < 0) idxNew = sortedDates.length - 1;
+
             let trendMap = {};
             if (sortedDates.length >= 2) {
-                let uniqStocks = [...new Set(etfData.filter(d => isNormalStock(d.stock, d.name)).map(d => d.stock))];
+                // 從全歷史資料安全比對篩選出正常個股
+                let uniqStocks = [...new Set(etfData.map(d => d.stock))].filter(sCode => {
+                    let match = etfData.find(d => d.stock === sCode);
+                    return match ? isNormalStock(match.stock, match.name) : false;
+                });
+
                 uniqStocks.forEach(sCode => {
                     let streakCount = 0;
                     let currentTrend = null;
-                    for (let i = sortedDates.length - 1; i > 0; i--) {
+                    
+                    // 以 idxNew 為軸心，動態向歷史過去推算連續天數
+                    for (let i = idxNew; i > 0; i--) {
                         let dateN = sortedDates[i];
                         let dateO = sortedDates[i - 1];
                         let vNew = etfData.find(d => d.date === dateN && d.stock === sCode)?.volume || 0;
                         let vOld = etfData.find(d => d.date === dateO && d.stock === sCode)?.volume || 0;
                         let diff = vNew - vOld;
-                        if (diff === 0) break;
+                        
+                        if (diff === 0) {
+                            break; 
+                        }
+                        
                         let dayTrend = diff > 0 ? "買" : "賣";
-                        if (currentTrend === null) { currentTrend = dayTrend; streakCount = 1; }
-                        else if (dayTrend === currentTrend) { streakCount++; }
-                        else { break; }
+                        if (currentTrend === null) {
+                            currentTrend = dayTrend;
+                            streakCount = 1;
+                        } else if (dayTrend === currentTrend) {
+                            streakCount++;
+                        } else {
+                            break; 
+                        }
                     }
-                    if (streakCount >= 2 && currentTrend) { trendMap[sCode] = '連' + currentTrend + streakCount + '日'; }
+                    
+                    // 門檻修正為 >= 1，確保不漏掉首日剛發生加減碼的焦點股
+                    if (streakCount >= 1 && currentTrend) { 
+                        trendMap[sCode] = '連' + currentTrend + streakCount + '日'; 
+                    }
                 });
             }
 
@@ -1126,8 +1152,8 @@ def main():
                 else if(r.nature === "DOWN") { badge = `<span class="badge-nature-down">🔻 經理人減持</span>`; dStyle = "color:#0f766e;"; }
                 else if(r.nature === "DELETE") { badge = `<span class="badge-nature-delete">❌ 完整剔除</span>`; dStyle = "color:#4b5563;"; }
 
-                let trendStr = trendMap[r.stock] || "無變動";
-                let trendHtml = `<span class="text-muted">無變動</span>`;
+                let trendStr = trendMap[r.stock] || "區間無連續動向";
+                let trendHtml = `<span class="text-muted">首日首筆變動</span>`;
                 if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
                 if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
 
@@ -1267,7 +1293,6 @@ def main():
             let etfSet = new Set(globalRawData.map(d => d.etf));
             let distRows = [];
             let weightRows = [];
-
             let totalDiff = 0;
 
             etfSet.forEach(eCode => {
@@ -1307,7 +1332,6 @@ def main():
             document.getElementById('globalCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
         }
 
-        // 👑 修正優化：加入轉圈動畫支援 (M1)
         function loadGlobalChanges() {
             document.getElementById('loading').style.display = 'flex';
             setTimeout(() => {
@@ -1377,7 +1401,6 @@ def main():
             document.getElementById('heatCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
         }
 
-        // 👑 修正優化：加入轉圈動畫支援 (M1)
         function loadMarketHeat() {
             document.getElementById('loading').style.display = 'flex';
             setTimeout(() => {
@@ -1453,7 +1476,6 @@ def main():
             }, 50);
         }
 
-        // 👑 修正優化：深度改造交叉比對矩陣（一口氣落實所有選、構想組合 A, B, C）
         function renderCompareMatrix() {
             let checkedCbs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
             
@@ -1473,7 +1495,6 @@ def main():
             
             placeholder.style.display = 'none';
             
-            // 構想 B / 選項 C：設置包含「共同持有度」的表頭欄位
             let baseHeader = '<th>股票代號</th><th>股票名稱</th><th>共同持有度</th>' + checkedCbs.map(c => `<th class="text-end font-monospace">${c}<br>權重</th>`).join('');
             document.getElementById('compareCoreTableHeader').innerHTML = baseHeader;
             document.getElementById('compareUniqueTableHeader').innerHTML = baseHeader;
@@ -1481,7 +1502,6 @@ def main():
             let dates = [...new Set(globalRawData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
             let latestDate = dates[dates.length - 1];
             
-            // 撈取所選 ETF 之所有獨立個股
             let stockMap = {};
             globalRawData.forEach(r => {
                 if(r.date === latestDate && checkedCbs.includes(r.etf) && isNormalStock(r.stock, r.name)) {
@@ -1489,7 +1509,6 @@ def main():
                 }
             });
             
-            // 深度運算每檔個股在多檔 ETF 之間的交叉持有細節
             let stockAnalysis = [];
             Object.keys(stockMap).forEach(sCode => {
                 let heldByCount = 0;
@@ -1513,16 +1532,14 @@ def main():
                 });
             });
             
-            // 智能排序 (Option C & 構想 B)：優先依共同持有度高低排序，其次依累積總權重高低排序
             stockAnalysis.sort((a, b) => {
                 if(b.heldByCount !== a.heldByCount) return b.heldByCount - a.heldByCount;
                 return b.totalWeightAcross - a.totalWeightAcross;
             });
             
-            // 👑 【實作選項 B】生成頂部核心摘要卡片面板 (Top 3 累積重疊權重最高之核心焦點)
             let overlapStocks = stockAnalysis.filter(x => x.heldByCount > (checkedCbs.length > 1 ? 1 : 0));
             let top3 = overlapStocks.slice(0, 3);
-            if(top3.length === 0 && stockAnalysis.length > 0) { top3 = stockAnalysis.slice(0, 3); } // 備援機制
+            if(top3.length === 0 && stockAnalysis.length > 0) { top3 = stockAnalysis.slice(0, 3); }
             
             if(top3.length > 0) {
                 summarySection.style.display = 'block';
@@ -1543,7 +1560,6 @@ def main():
                 summarySection.style.display = 'none';
             }
             
-            // 👑 【實作選項 A & 構想 A、C】雙區塊矩陣與熱力圖渲染
             let coreRowsHtml = "";
             let uniqueRowsHtml = "";
             
@@ -1562,7 +1578,6 @@ def main():
                     
                     if(w > 0) {
                         displayVal = w.toFixed(2) + "%";
-                        // 構想 A：依權重區間給予深淺藍底，文字放大加粗
                         if(w >= 10) cellClass = "weight-high";
                         else if(w >= 5) cellClass = "weight-med";
                         else cellClass = "weight-low";
@@ -1577,9 +1592,8 @@ def main():
                 else { uniqueRowsHtml += rowHtml; }
             });
             
-            // 渲染至各自的分組表格中
             coreCard.style.display = 'block';
-            document.getElementById('compareCoreTableBody').innerHTML = coreRowsHtml || `<tr><td colspan="${3 + checkedCbs.length}" class="text-center py-4 text-muted"><i class="bi bi-info-circle me-1"></i> 所選定的 ETF 組合之間目前無任何完全重疊的 100% 核心持股</td></tr>`;
+            document.getElementById('compareCoreTableBody').innerHTML = coreRowsHtml || `<tr><td colspan="${3 + checkedCbs.length}" class="text-center py-4 text-muted"><i class="bi bi-info-circle me-1"></i> 所選定的 ETF 組合之間目前無 any 完全重疊的 100% 核心持股</td></tr>`;
             
             uniqueCard.style.display = 'block';
             document.getElementById('compareUniqueTableBody').innerHTML = uniqueRowsHtml || `<tr><td colspan="${3 + checkedCbs.length}" class="text-center py-4 text-muted"><i class="bi bi-info-circle me-1"></i> 無個別差異特色持股</td></tr>`;
