@@ -266,7 +266,6 @@ def main():
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
 
-    # 📌 完整保留您原本極其龐大的 HTML / Bootstrap 面板與全套前端 JavaScript 互動邏輯
     html_template = """
     <!DOCTYPE html>
     <html>
@@ -613,8 +612,9 @@ def main():
             
             <div id="stockResultContainer" style="display: none;">
               <div class="row g-4">
+                <!-- 左側欄位：包含觀測目標與區間籌碼調整明細 -->
                 <div class="col-md-4">
-                  <div class="card p-4 text-center">
+                  <div class="card p-4 text-center mb-4">
                     <h5 class="text-muted mb-2">觀測目標</h5>
                     <h2 class="fw-bold text-primary mb-3" id="resStockTitle">-</h2>
                     <div class="row g-2 mt-2">
@@ -632,8 +632,22 @@ def main():
                       </div>
                     </div>
                   </div>
+
+                  <!-- 調整排版：已成功移至觀測目標下方的區間籌碼調整明細 -->
+                  <div class="card">
+                    <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金經理人對此股票的區間籌碼調整明細</div>
+                    <div class="table-responsive">
+                      <table class="table table-hover align-middle">
+                        <thead>
+                          <tr><th>持有之 ETF</th><th>區間籌碼增減變動 (股數)</th></tr>
+                        </thead>
+                        <tbody id="stockDistBody"></tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
                 
+                <!-- 右側欄位：被哪些 ETF 所持有 -->
                 <div class="col-md-8">
                   <div class="card">
                     <div class="card-header text-primary"><i class="bi bi-grid-3x3-gap-fill me-2"></i>該個股目前被哪些 ETF 所持有？（依持股權重排行）</div>
@@ -646,18 +660,6 @@ def main():
                       </table>
                     </div>
                   </div>
-                </div>
-              </div>
-              
-              <div class="card mt-4">
-                <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金經理人對此股票的區間籌碼調整明細</div>
-                <div class="table-responsive">
-                  <table class="table table-hover align-middle">
-                    <thead>
-                      <tr><th>持有之 ETF</th><th>區間籌碼增減變動 (股數)</th></tr>
-                    </thead>
-                    <tbody id="stockDistBody"></tbody>
-                  </table>
                 </div>
               </div>
             </div>
@@ -858,24 +860,23 @@ def main():
         }
 
         function isNormalStock(code, name) {
-    let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
-    let cashEx = [
-        "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
-        "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售","買權","賣權","TWSE"
-    ];
-    if (meta.includes(code) || meta.includes(name)) return false;
-    
-    let upperCode = code.toUpperCase();
-    let upperName = name.toUpperCase();
-    if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
-    
-    // --- 新增：過濾台灣普通公司債 (G, B, A, H, F 開頭 + 5碼英數字，總長度固定為 6) ---
-    if (/^[GBAHF][A-Z0-9]{5}$/.test(upperCode)) {
-        return false;
-    }
-    
-    return true;
-}
+            let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
+            let cashEx = [
+                "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
+                "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售","買權","賣權","TWSE"
+            ];
+            if (meta.includes(code) || meta.includes(name)) return false;
+            
+            let upperCode = code.toUpperCase();
+            let upperName = name.toUpperCase();
+            if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
+            
+            if (/^[GBAHF][A-Z0-9]{5}$/.test(upperCode)) {
+                return false;
+            }
+            return true;
+        }
+
         function initDashboard() {
             let etfSet = new Set();
             globalRawData.forEach(r => { if(r.etf) etfSet.add(r.etf); });
@@ -1110,7 +1111,7 @@ def main():
             let html = "";
             matches.slice(0, 8).forEach(item => {
                 if (isMultiple) { html += `<div class="suggestion-item" onclick="addTargetStockTag('${item.code}', '${item.name}', '${boxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`; }
-                else { html += `<div class="suggestion-item" onclick="selectStockSuggestion('${item.code}', '${item.name}', '${boxId}', appraisal_done='${inputId}')"><b>${item.code}</b> - ${item.name}</div>`; }
+                else { html += `<div class="suggestion-item" onclick="selectStockSuggestion('${item.code}', '${item.name}', '${boxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`; }
             });
             box.innerHTML = html;
             box.style.display = 'block';
@@ -1302,7 +1303,7 @@ def main():
             document.getElementById('heatCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
         }
 
-                function loadMarketHeat() {
+        function loadMarketHeat() {
             let type = document.getElementById('heatRangeType').value;
             let stockMap = {};
             
@@ -1333,6 +1334,7 @@ def main():
             document.getElementById('heatBuyBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-danger fw-bold">+${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
             document.getElementById('heatSellBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-success text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-success fw-bold">${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
         }
+
         function renderCompareMatrix() {
             let checkedCbs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
             let header = document.getElementById('compareTableHeader');
@@ -1358,7 +1360,7 @@ def main():
                 checkedCbs.forEach(eCode => {
                     let match = globalRawData.find(x => x.date === latestDate && x.etf === eCode && x.stock === sCode);
                     let w = match ? Number(match.weight) : 0;
-                    row += `<td class="text-end font-monospace ${w > 0 ? 'text-primary fw-bold' : 'text-muted'}\">${w > 0 ? w.toFixed(2)+'%' : '-'}</td>`;
+                    row += `<td class="text-end font-monospace ${w > 0 ? 'text-primary fw-bold' : 'text-muted'}">${w > 0 ? w.toFixed(2)+'%' : '-'}</td>`;
                 });
                 return `<tr>${row}</tr>`;
             }).join('') || '<tr><td colspan="2" class="text-center text-muted py-4">所勾選的 ETF 組合中目前無共同持股標的</td></tr>';
@@ -1381,7 +1383,7 @@ def main():
         "__ETF_NAME_PLACEHOLDER__", etf_name_json
     )
 
-    # 符合 Streamlit 2026 最新規範，將已被棄用的 st.components.v1.html 升級替換為新版專用的 st.iframe 
     components.html(final_html, height=1200, scrolling=True)
+
 if __name__ == "__main__":
     main()
