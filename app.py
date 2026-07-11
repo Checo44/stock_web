@@ -108,7 +108,7 @@ def fetch_ticker_mapping():
                 code = str(row[code_idx]).strip()
                 name = str(row[name_idx]).strip()
                 if code: 
-                    # 👍 修正優化：若對照表的代號為純英文，自動補上空格與 US 國碼
+                    # 若對照表的代號為純英文，自動補上空格與 US 國碼
                     if code.isalpha():
                         code = f"{code} US"
                     ticker_map[code] = name
@@ -218,7 +218,7 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 👍 修正優化：過濾出歷史紀錄中所有「純英文」的股票代號，自動補上空格與 US 國碼
+    # 過濾出歷史紀錄中所有「純英文」的股票代號，自動補上空格與 US 國碼
     is_pure_english = df['stock'].str.match(r'^[A-Za-z]+$')
     df.loc[is_pure_english, 'stock'] = df.loc[is_pure_english, 'stock'] + ' US'
     
@@ -414,6 +414,35 @@ def main():
           border-bottom: 1px solid #dee2e6;
           background-color: #fff !important;
         }
+
+        /* 👑 新增美化：市場熱度排行專用精緻獎牌與進度條樣式 */
+        .rank-medal {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          font-weight: 700;
+          font-size: 0.85rem;
+        }
+        .medal-1 { background: linear-gradient(135deg, #ffd700, #ffa500); color: #fff; box-shadow: 0 2px 5px rgba(255,165,0,0.4); }
+        .medal-2 { background: linear-gradient(135deg, #c0c0c0, #a9a9a9); color: #fff; box-shadow: 0 2px 5px rgba(169,169,169,0.3); }
+        .medal-3 { background: linear-gradient(135deg, #cd7f32, #8b4513); color: #fff; box-shadow: 0 2px 5px rgba(139,69,19,0.4); }
+        .medal-other { background-color: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+        
+        .heat-progress-container {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 12px;
+        }
+        .heat-bar-wrapper {
+          width: 120px;
+          background-color: #f1f5f9;
+          border-radius: 4px;
+          overflow: hidden;
+        }
       </style>
     </head>
     <body>
@@ -596,8 +625,8 @@ def main():
             <div class="card p-4 bg-light mb-4">
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-6" style="position: relative;">
-                  <label class="form-label fw-bold text-dark fs-5"><i class="bi bi-search me-1 text-primary"></i>搜尋單一台灣上市櫃股票</label>
-                  <input type="text" id="stockSearchInput" class="form-control form-control-lg" placeholder="請輸入股票名稱或代號 (如: GOOG US 或 2330)" onkeyup="searchStockSuggestions(this.value, 'searchSuggestions', 'stockSearchInput', false)">
+                  <label class="form-label fw-bold text-dark fs-5"><i class="bi bi-search me-1 text-primary"></i>搜尋單一上市櫃股票 (台股/美股)</label>
+                  <input type="text" id="stockSearchInput" class="form-control form-control-lg" placeholder="請輸入股票名稱或代號 (如: NVDA 或 2330)" onkeyup="searchStockSuggestions(this.value, 'searchSuggestions', 'stockSearchInput', false)">
                   <div id="searchSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-md-2 pt-md-4">
@@ -785,7 +814,7 @@ def main():
                   <div class="card-header text-danger"><i class="bi bi-graph-up-arrow me-2"></i>全市場經理人淨加碼前 10 大股票</div>
                   <div class="table-responsive">
                     <table class="table align-middle">
-                      <thead><tr><th>排行</th><th>股票標的</th><th class="text-end">區間總加碼股數</th></tr></thead>
+                      <thead><tr><th>排行</th><th>股票標的</th><th class="text-end" style="min-width: 230px;">區間總加碼股數</th></tr></thead>
                       <tbody id="heatBuyBody"></tbody>
                     </table>
                   </div>
@@ -796,7 +825,7 @@ def main():
                   <div class="card-header text-success"><i class="bi bi-graph-down-arrow me-2"></i>全市場經理人淨減持前 10 大股票</div>
                   <div class="table-responsive">
                     <table class="table align-middle">
-                      <thead><tr><th>排行</th><th>股票標的</th><th class="text-end">區間總減持股數</th></tr></thead>
+                      <thead><tr><th>排行</th><th>股票標的</th><th class="text-end" style="min-width: 230px;">區間總減持股數</th></tr></thead>
                       <tbody id="heatSellBody"></tbody>
                     </table>
                   </div>
@@ -1096,7 +1125,8 @@ def main():
             let matches = [];
             Object.keys(stockMap).forEach(code => {
                 let name = stockMap[code];
-                if (code.includes(k) || name.toLowerCase().includes(k)) { matches.push({ code: code, name: name }); }
+                // 🛠️ 修正優化：將 code 轉小寫進行 case-insensitive 模糊比對，完美撈出包含 " US" 的美股
+                if (code.toLowerCase().includes(k) || name.toLowerCase().includes(k)) { matches.push({ code: code, name: name }); }
             });
             
             if (matches.length === 0) { box.style.display = 'none'; return; }
@@ -1179,8 +1209,15 @@ def main():
             let code = document.getElementById('stockSearchInput').value.trim();
             if(!code) { alert("請輸入個股代號或名稱"); return; }
             
-            let matchRow = globalRawData.find(x => x.stock === code || x.name === code);
-            if (!matchRow) { alert("查無此股票資料，請輸入完整正確代號 (美股請務必加上國碼，例如: GOOG US)"); return; }
+            // 🛠️ 修正優化：支援強健的全形態比對（自動排除大小寫障礙，若輸入純代號 "NVDA" 則自動防呆配對資料庫的 "NVDA US"）
+            let searchUpper = code.toUpperCase();
+            let matchRow = globalRawData.find(x => {
+                let sTarget = x.stock ? x.stock.trim().toUpperCase() : "";
+                let nTarget = x.name ? x.name.trim().toUpperCase() : "";
+                return sTarget === searchUpper || nTarget === searchUpper || sTarget === (searchUpper + " US");
+            });
+            
+            if (!matchRow) { alert("查無此股票資料，請輸入完整正確代號 (若為美股，建議直接利用下拉選單點擊選取)"); return; }
             let sCode = matchRow.stock;
             let sName = matchRow.name;
 
@@ -1324,8 +1361,49 @@ def main():
             let topBuy = [...list].sort((a,b) => b.diff - a.diff).slice(0, 10);
             let topSell = [...list].sort((a,b) => a.diff - b.diff).slice(0, 10);
 
-            document.getElementById('heatBuyBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-danger fw-bold">+${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
-            document.getElementById('heatSellBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-success text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-success fw-bold">${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
+            // 👑 獲取前十名的最大絕對值作為 Progress Bar 滿格基準線
+            let maxBuy = topBuy.length > 0 ? Math.max(...topBuy.map(x => Math.abs(x.diff))) : 1;
+            let maxSell = topSell.length > 0 ? Math.max(...topSell.map(x => Math.abs(x.diff))) : 1;
+
+            // 👑 渲染加碼排行榜（注入金銀銅徽章 + 進度條）
+            document.getElementById('heatBuyBody').innerHTML = topBuy.map((x, i) => {
+                let medalClass = i === 0 ? 'medal-1' : (i === 1 ? 'medal-2' : (i === 2 ? 'medal-3' : 'medal-other'));
+                let medalContent = i < 3 ? `<i class="bi bi-trophy-fill"></i>` : (i + 1);
+                let barWidth = maxBuy > 0 ? (Math.abs(x.diff) / maxBuy * 100) : 0;
+                
+                return `<tr>
+                    <td><span class="rank-medal ${medalClass}">${medalContent}</span></td>
+                    <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
+                    <td>
+                        <div class="heat-progress-container">
+                            <span class="font-monospace text-danger fw-bold">+${Math.round(x.diff).toLocaleString()} 股</span>
+                            <div class="progress heat-bar-wrapper d-none d-md-flex" style="height: 6px;">
+                                <div class="progress-bar bg-danger" role="progressbar" style="width: ${barWidth}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
+
+            // 👑 渲染減持排行榜（注入金銀銅徽章 + 進度條）
+            document.getElementById('heatSellBody').innerHTML = topSell.map((x, i) => {
+                let medalClass = i === 0 ? 'medal-1' : (i === 1 ? 'medal-2' : (i === 2 ? 'medal-3' : 'medal-other'));
+                let medalContent = i < 3 ? `<i class="bi bi-trophy-fill"></i>` : (i + 1);
+                let barWidth = maxSell > 0 ? (Math.abs(x.diff) / maxSell * 100) : 0;
+                
+                return `<tr>
+                    <td><span class="rank-medal ${medalClass}">${medalContent}</span></td>
+                    <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
+                    <td>
+                        <div class="heat-progress-container">
+                            <span class="font-monospace text-success fw-bold">${Math.round(x.diff).toLocaleString()} 股</span>
+                            <div class="progress heat-bar-wrapper d-none d-md-flex" style="height: 6px;">
+                                <div class="progress-bar bg-success" role="progressbar" style="width: ${barWidth}%"></div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
         }
 
         function renderCompareMatrix() {
