@@ -6,6 +6,7 @@ import gspread
 import json
 import os
 import requests
+import re
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -80,7 +81,6 @@ def fetch_raw_sheet_data():
     except Exception as e:
         return None, f"讀取工作表「{WORKSHEET_HISTORY}」失敗: {str(e)}"
 
-# 👍 修正優化：動態偵測表頭欄位位置，徹底排除 KeyError
 @st.cache_data(ttl=300)
 def fetch_ticker_mapping():
     if not sh: return {}, "無法連線至 Google 試算表"
@@ -89,19 +89,16 @@ def fetch_ticker_mapping():
         raw_ticker = ws.get_all_values()
         if not raw_ticker or len(raw_ticker) < 1: return {}, None
         
-        # 清除表頭前後空白
         headers = [str(h).strip() for h in raw_ticker[0]]
         code_idx = None
         name_idx = None
         
-        # 自動搜尋欄位索引
         for idx, h in enumerate(headers):
             if h in ["股票代號", "代號", "成分股代號", "商品代號"]:
                 code_idx = idx
             if h in ["公司名稱", "股票名稱", "名稱", "成分股名稱", "商品名稱"]:
                 name_idx = idx
                 
-        # 安全退路機制：若找不到對應表頭，預設第 0 欄為代號，第 1 欄為名稱
         if code_idx is None: code_idx = 0
         if name_idx is None: name_idx = 1 if len(headers) > 1 else 0
         
@@ -111,6 +108,9 @@ def fetch_ticker_mapping():
                 code = str(row[code_idx]).strip()
                 name = str(row[name_idx]).strip()
                 if code: 
+                    # 👍 修正優化：若對照表的代號為純英文，自動補上空格與 US 國碼
+                    if code.isalpha():
+                        code = f"{code} US"
                     ticker_map[code] = name
         return ticker_map, None
     except Exception as e:
@@ -181,7 +181,6 @@ def fetch_twse_live_data(etf_list):
         print(f"證交所後端連線異常: {e}")
     return twse_market_data
 
-# 👍 修正優化：alias_map 補上「公司名稱」對應，並引入「安全初始化機制」防堵所有 KeyError
 def process_and_standardize(raw_data, ticker_map=None):
     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
     df.columns = [str(c).strip() for c in df.columns]
@@ -190,7 +189,7 @@ def process_and_standardize(raw_data, ticker_map=None):
         "etf": ["ETF代號", "ETF", "ETF碼"],
         "date": ["日期", "時間", "Date"],
         "stock": ["成分股代號", "股票代號", "代號", "商品代號"],
-        "name": ["成分股名稱", "股票名稱", "公司名稱", "名稱", "商品名稱"], # 👈 已成功加入「公司名稱」
+        "name": ["成分股名稱", "股票名稱", "公司名稱", "名稱", "商品名稱"], 
         "weight": ["持股權重", "權重", "權重(%)", "持股比例"],
         "volume": ["持有數量", "持有數", "張數", "持有張數", "股數", "持有股數"]
     }
@@ -202,12 +201,6 @@ def process_and_standardize(raw_data, ticker_map=None):
                 rename_dict[alias] = standard
                 break
                 
-    orig_name_col = None
-    for alias in alias_map["name"]:
-        if alias in df.columns:
-            orig_name_col = alias
-            break
-
     df = df.rename(columns=rename_dict)
     
     missing = [k for k in ["etf", "date", "stock", "weight", "volume"] if k not in df.columns]
@@ -225,7 +218,10 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['stock'] = df['stock'].astype(str).str.strip()
     df['etf'] = df['etf'].astype(str).str.strip()
     
-    # 🔥 核心修正點：如果歷史表格中原先就沒有任何名稱欄位，先建立空的 'name'，避免後續 fillna 拋出 KeyError
+    # 👍 修正優化：過濾出歷史紀錄中所有「純英文」的股票代號，自動補上空格與 US 國碼
+    is_pure_english = df['stock'].str.match(r'^[A-Za-z]+$')
+    df.loc[is_pure_english, 'stock'] = df.loc[is_pure_english, 'stock'] + ' US'
+    
     if 'name' not in df.columns:
         df['name'] = ""
     
@@ -601,7 +597,7 @@ def main():
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-6" style="position: relative;">
                   <label class="form-label fw-bold text-dark fs-5"><i class="bi bi-search me-1 text-primary"></i>搜尋單一台灣上市櫃股票</label>
-                  <input type="text" id="stockSearchInput" class="form-control form-control-lg" placeholder="請輸入股票名稱或代號 (如: 2330 或 台積電)" onkeyup="searchStockSuggestions(this.value, 'searchSuggestions', 'stockSearchInput', false)">
+                  <input type="text" id="stockSearchInput" class="form-control form-control-lg" placeholder="請輸入股票名稱或代號 (如: GOOG US 或 2330)" onkeyup="searchStockSuggestions(this.value, 'searchSuggestions', 'stockSearchInput', false)">
                   <div id="searchSuggestions" class="suggestion-box" style="display: none;"></div>
                 </div>
                 <div class="col-md-2 pt-md-4">
@@ -612,7 +608,6 @@ def main():
             
             <div id="stockResultContainer" style="display: none;">
               <div class="row g-4">
-                <!-- 左側欄位：包含觀測目標與區間籌碼調整明細 -->
                 <div class="col-md-4">
                   <div class="card p-4 text-center mb-4">
                     <h5 class="text-muted mb-2">觀測目標</h5>
@@ -633,7 +628,6 @@ def main():
                     </div>
                   </div>
 
-                  <!-- 調整排版：已成功移至觀測目標下方的區間籌碼調整明細 -->
                   <div class="card">
                     <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金經理人對此股票的區間籌碼調整明細</div>
                     <div class="table-responsive">
@@ -647,7 +641,6 @@ def main():
                   </div>
                 </div>
                 
-                <!-- 右側欄位：被哪些 ETF 所持有 -->
                 <div class="col-md-8">
                   <div class="card">
                     <div class="card-header text-primary"><i class="bi bi-grid-3x3-gap-fill me-2"></i>該個股目前被哪些 ETF 所持有？（依持股權重排行）</div>
@@ -992,8 +985,8 @@ def main():
             let etfData = globalRawData.filter(d => d.etf === etfName);
 
             if (type === 'custom') {
-                dOld = document.getElementById('startDateInput').value;
-                dNew = document.getElementById('endDateInput').value;
+                document.getElementById('startDateInput').value = sortedDates[sortedDates.length - 2];
+                document.getElementById('endDateInput').value = sortedDates[sortedDates.length - 1];
             } else {
                 let offset = parseInt(type);
                 if (sortedDates.length > offset) {
@@ -1187,7 +1180,7 @@ def main():
             if(!code) { alert("請輸入個股代號或名稱"); return; }
             
             let matchRow = globalRawData.find(x => x.stock === code || x.name === code);
-            if (!matchRow) { alert("查無此股票資料，請輸入完整正確代號"); return; }
+            if (!matchRow) { alert("查無此股票資料，請輸入完整正確代號 (美股請務必加上國碼，例如: GOOG US)"); return; }
             let sCode = matchRow.stock;
             let sName = matchRow.name;
 
@@ -1370,7 +1363,6 @@ def main():
     </html>
     """
 
-    # 將後端清洗過後的 JSON 資料動態注入到前端 JavaScript 中
     final_html = html_template.replace(
         "__DATA_PLACEHOLDER__", json_data
     ).replace(
