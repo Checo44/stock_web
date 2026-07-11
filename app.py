@@ -1304,36 +1304,28 @@ def main():
 
         function loadMarketHeat() {
             let type = document.getElementById('heatRangeType').value;
-            let stockMap = {};
-            
+            let dates = [...new Set(globalRawData.map(d=>d.date))].sort((a,b)=>new Date(a)-new Date(b));
+            let latestDate = dates[dates.length - 1];
+            let compDate = (type === 'custom') ? document.getElementById('heatStartDate').value : dates[Math.max(0, dates.length - 1 - parseInt(type))];
+
+            document.getElementById('heatBuyTitle').innerHTML = `<i class="bi bi-graph-up me-2"></i>跨市場大加總：淨買超前 10 大個股 (${compDate} ~ ${latestDate})`;
+            document.getElementById('heatSellTitle').innerHTML = `<i class="bi bi-graph-down me-2"></i>跨市場大加總：淨賣超前 10 大個股 (${compDate} ~ ${latestDate})`;
+
+            let agg = {};
             globalRawData.forEach(r => {
-                if(r.stock && isNormalStock(r.stock, r.name)) { stockMap[r.stock] = { code: r.stock, name: r.name }; }
+                if(!isNormalStock(r.stock, r.name)) return;
+                if(!agg[r.stock]) agg[r.stock] = { code: r.stock, name: r.name, nVol: 0, oVol: 0 };
+                if(r.date === latestDate) agg[r.stock].nVol += Number(r.volume);
+                if(r.date === compDate) agg[r.stock].oVol += Number(r.volume);
             });
 
-            let etfSet = new Set(globalRawData.map(d => d.etf));
-            let list = Object.keys(stockMap).map(sCode => {
-                let oVol = 0, nVol = 0;
-                etfSet.forEach(eCode => {
-                    let etfData = globalRawData.filter(d => d.etf === eCode);
-                    let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-                    let dOld = null, dNew = null;
-                    if(type === 'custom') { dOld = document.getElementById('heatStartDate').value; dNew = document.getElementById('heatEndDate').value; }
-                    else { let offset = parseInt(type); if(dates.length > offset) { dOld = dates[dates.length - 1 - offset]; dNew = dates[dates.length - 1]; } }
-                    if(dOld && dNew) {
-                        oVol += etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
-                        nVol += etfData.find(d => d.date === dNew && d.stock === sCode)?.volume || 0;
-                    }
-                });
-                return { code: sCode, name: stockMap[sCode].name, diff: nVol - oVol };
-            }).filter(x => x.diff !== 0);
+            let list = Object.values(agg).map(x => { x.diff = x.nVol - x.oVol; return x; }).filter(x => x.diff !== 0);
+            let topBuy = [...list].sort((a,b)=>b.diff - a.diff).slice(0, 10);
+            let topSell = [...list].sort((a,b)=>a.diff - b.diff).slice(0, 10);
 
-            let topBuy = [...list].sort((a,b) => b.diff - a.diff).slice(0, 10);
-            let topSell = [...list].sort((a,b) => a.diff - b.diff).slice(0, 10);
-
-            document.getElementById('heatBuyBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-danger fw-bold">+${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
-            document.getElementById('heatSellBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-success text-white">${i+1}</span></td><td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td><td class="text-end font-monospace text-success fw-bold">${Math.round(x.diff).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
+            document.getElementById('heatBuyTableBody').innerHTML = topBuy.map((x, i) => `<tr><td><span class="rank-badge bg-danger text-white">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-danger fw-bold font-monospace">+${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
+            document.getElementById('heatSellTableBody').innerHTML = topSell.map((x, i) => `<tr><td><span class="rank-badge bg-teal text-white" style="background-color:#0f766e;">${i+1}</span></td><td>${x.code}</td><td class="fw-bold">${x.name}</td><td class="text-end text-success fw-bold font-monospace">${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
         }
-
         function renderCompareMatrix() {
             let checkedCbs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
             let header = document.getElementById('compareTableHeader');
