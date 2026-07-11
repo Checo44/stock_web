@@ -858,13 +858,24 @@ def main():
         }
 
         function isNormalStock(code, name) {
-            if(!code || code.trim() === "") return false;
-            let c = code.trim();
-            if (c.length > 4) return false;
-            if (name && (name.includes("現金") || name.includes("USD") || name.includes("正2") || name.includes("反1") || name.includes("期貨"))) return false;
-            return true;
-        }
-
+    let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL", ""];
+    let cashEx = [
+        "DA_", "CASH", "C_", "PFUR_", "USD", "TWD", "NTD", "現金", "應付", "應收", "保證金", "期貨",
+        "RDI", "DR_", "RECEIVABLES", "DIVIDENDS", "DISPOSAL", "INVESTMENTS", "權證", "型購", "型售","買權","賣權","TWSE"
+    ];
+    if (meta.includes(code) || meta.includes(name)) return false;
+    
+    let upperCode = code.toUpperCase();
+    let upperName = name.toUpperCase();
+    if (cashEx.some(k => upperCode.includes(k.toUpperCase()) || upperName.includes(k.toUpperCase()))) return false;
+    
+    // --- 新增：過濾台灣普通公司債 (G, B, A, H, F 開頭 + 5碼英數字，總長度固定為 6) ---
+    if (/^[GBAHF][A-Z0-9]{5}$/.test(upperCode)) {
+        return false;
+    }
+    
+    return true;
+}
         function initDashboard() {
             let etfSet = new Set();
             globalRawData.forEach(r => { if(r.etf) etfSet.add(r.etf); });
