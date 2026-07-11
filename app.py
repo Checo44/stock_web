@@ -269,6 +269,8 @@ def main():
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+      <!-- 注入 ECharts 高效能網絡拓撲渲染引擊 -->
+      <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
       
       <style>
         body {
@@ -477,6 +479,9 @@ def main():
             <button class="nav-link active" id="tab-home" onclick="switchTab('content-home', 'tab-home')"><i class="bi bi-house-door-fill me-2"></i>首頁</button>
           </li>
           <li class="nav-item">
+            <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-bounding-box-circles text-info me-2"></i>力導向網絡拓撲星系圖</button>
+          </li>
+          <li class="nav-item">
             <button class="nav-link" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
           </li>
           <li class="nav-item">
@@ -512,6 +517,32 @@ def main():
                   <tbody id="homeTableBody"></tbody>
                 </table>
               </div>
+            </div>
+          </div>
+
+          <!-- 🌌 新增頁面：力導向網絡拓撲星系圖 -->
+          <div class="custom-tab-content" id="content-g">
+            <div class="card p-3 mb-4 bg-light border">
+              <div class="fw-bold text-dark mb-2"><i class="bi bi-check2-square me-1"></i>勾選欲加入金融星系的 ETF 基金清單（支援複選多檔進行交叉拓撲宇宙撞擊分析）</div>
+              <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="galaxyCheckboxContainer"></div>
+              
+              <div class="row align-items-center g-3 mt-2">
+                <div class="col-md-5">
+                  <label class="form-label fw-bold text-secondary"><i class="bi bi-funnel-fill me-1"></i>星系觀測過濾模式</label>
+                  <select id="galaxyFilterMode" class="form-select form-select-lg fw-bold text-primary" onchange="renderGalaxyChart()">
+                    <option value="top20">過濾模式一：僅觀測各 ETF 「持股前 20 大」成分股</option>
+                    <option value="weight5">過濾模式二：僅觀測各 ETF 「持股權重高於 5%」之絕對核心圈</option>
+                  </select>
+                </div>
+                <div class="col-md-7 text-md-end pt-md-4 text-muted small">
+                  <div><i class="bi bi-info-circle me-1"></i> <b>星系指南：</b>核心大節點為 ETF，外圍小節點為成分股。連線粗細代表持股權重。</div>
+                  <div>點擊 <b>ETF 核心</b>可全面高亮聚焦該星系；點擊 <b>外圍個股</b>可即時彈窗透視全市場交叉持股比例！</div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="card p-0 position-relative border-0 shadow-sm rounded-4" style="background: #fafafa; overflow: hidden;">
+              <div id="galaxyChart" style="width: 100%; height: 780px;"></div>
             </div>
           </div>
           
@@ -712,7 +743,7 @@ def main():
                 </div>
                 <div class="col-12 mt-3">
                   <div class="fw-bold text-secondary mb-2">目前已選取的台灣投資目標公司：</div>
-                  <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded min-height" style="min-height: 58px;">
+                  <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded" style="min-height: 58px;">
                     <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選組合</span>
                   </div>
                 </div>
@@ -890,6 +921,33 @@ def main():
         </div>
       </div>
 
+      <!-- 🌌 星系個股點擊：Bootstrap 互動視窗 (Modal) -->
+      <div class="modal fade" id="galaxyStockModal" tabindex="-1" aria-labelledby="galaxyStockModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content border-0 shadow-lg rounded-4">
+            <div class="modal-header bg-light border-bottom-0 py-3 px-4">
+              <h5 class="modal-title fw-bold text-dark d-flex align-items-center" id="galaxyStockModalLabel">
+                <i class="bi bi-diagram-3-fill text-info me-2"></i>成分股持股分佈
+              </h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+              <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>納入此股之星系 ETF</th>
+                      <th class="text-end">持有權重比例</th>
+                    </tr>
+                  </thead>
+                  <tbody id="galaxyModalTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
       <script>
         const globalRawData = __DATA_PLACEHOLDER__;
@@ -900,6 +958,7 @@ def main():
 
         let selectedEtf = null;
         let selectedTargetStocks = [];
+        let galaxyChartInstance = null; // 儲存星系圖實例
 
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
@@ -915,9 +974,15 @@ def main():
             document.querySelectorAll('#mainTabs .nav-link').forEach(el => el.classList.remove('active'));
             document.getElementById(contentId).classList.add('active');
             document.getElementById(tabId).classList.add('active');
+
+            // 👑 解決 ECharts 在隱藏容器中初始化寬度坍塌的經典 Bug
+            if (contentId === 'content-g') {
+                setTimeout(() => {
+                    renderGalaxyChart();
+                }, 50);
+            }
         }
 
-        // 👑 修正優化 1：放寬 isNormalStock 過濾邏輯，不再將空字串當作判定黑名單，避免中斷連續天數計算
         function isNormalStock(code, name) {
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL"];
             if (!code || code.trim() === "") return false;
@@ -949,16 +1014,22 @@ def main():
 
             let listGroup = document.getElementById('etfListGroup');
             let compareContainer = document.getElementById('compareCheckboxContainer');
+            let galaxyContainer = document.getElementById('galaxyCheckboxContainer');
             
             let listHtml = "";
             let compareHtml = "";
+            let galaxyHtml = "";
             let homeHtml = "";
 
-            sortedEtfs.forEach(etf => {
+            sortedEtfs.forEach((etf, index) => {
                 let mappedName = etfNameMappingData[etf] || "未知名稱";
                 listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
                 compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 
+                // 🌌 星系圖複選框：預設勾選前 3 檔，讓散戶進來時直接看到星系宇宙對撞的震撼效果
+                let isChecked = index < 3 ? "checked" : "";
+                galaxyHtml += `<div class="form-check form-check-inline"><input class="form-check-input galaxy-cb" type="checkbox" value="${etf}" id="galaxy-chk-${etf}" ${isChecked} onchange="renderGalaxyChart()"><label class="form-check-label font-monospace" for="galaxy-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
+
                 let price = "-";
                 let changePct = "-";
                 let twseData = twseLiveMarketData[etf] || null;
@@ -984,12 +1055,245 @@ def main():
 
             listGroup.innerHTML = listHtml;
             compareContainer.innerHTML = compareHtml;
+            if(galaxyContainer) galaxyContainer.innerHTML = galaxyHtml;
             document.getElementById('homeTableBody').innerHTML = homeHtml;
 
             if(sortedEtfs.length > 0) {
                 selectEtf(sortedEtfs[0]);
             }
+            
+            // 預先在背景組裝一次星系圖
+            renderGalaxyChart();
         }
+
+        // ==========================================
+        // 🌌 核心實作：ECharts 力導向網絡星系圖組裝邏輯
+        // ==========================================
+        function renderGalaxyChart() {
+            let chartDom = document.getElementById('galaxyChart');
+            if (!chartDom) return;
+            
+            if (!galaxyChartInstance) {
+                galaxyChartInstance = echarts.init(chartDom);
+            }
+            
+            // 1. 取得所有被勾選的 ETF 代號
+            let checkedEtfs = Array.from(document.querySelectorAll('.galaxy-cb:checked')).map(cb => cb.value);
+            if (checkedEtfs.length === 0) {
+                galaxyChartInstance.clear();
+                galaxyChartInstance.setOption({
+                    title: { text: "請勾選上方至少一檔 ETF 開始觀測金融拓撲星系", left: "center", top: "center", textStyle: { color: "#999", fontSize: 16 } }
+                });
+                return;
+            }
+            
+            // 2. 獲取最新資料日期
+            let dates = [...new Set(globalRawData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+            let latestDate = dates[dates.length - 1];
+            
+            let nodesMap = {};
+            let links = [];
+            let filterMode = document.getElementById('galaxyFilterMode').value;
+            
+            // 3. 先行建立 ETF 核心母體節點（永久亮起標籤）
+            checkedEtfs.forEach(eCode => {
+                let mappedName = etfNameMappingData[eCode] || "未知基金";
+                nodesMap[eCode] = {
+                    id: eCode,
+                    name: eCode,
+                    value: mappedName,
+                    symbolSize: 45, // 核心節點放大
+                    isEtf: true,
+                    itemStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 1, 1, [
+                            { offset: 0, color: '#1e3c72' },
+                            { offset: 1, color: '#2a5298' }
+                        ]),
+                        borderColor: '#fff',
+                        borderWidth: 2,
+                        shadowBlur: 12,
+                        shadowColor: 'rgba(30, 60, 114, 0.6)'
+                    },
+                    label: {
+                        show: true,
+                        position: 'inside',
+                        color: '#ffffff',
+                        fontWeight: 'bold',
+                        fontSize: 12,
+                        formatter: '{b}'
+                    }
+                };
+            });
+            
+            // 4. 根據過濾條件拉取外圍成分股子代碼
+            checkedEtfs.forEach(eCode => {
+                let etfData = globalRawData.filter(d => d.etf === eCode && d.date === latestDate && isNormalStock(d.stock, d.name));
+                // 降序排序權重
+                etfData.sort((a, b) => Number(b.weight) - Number(a.weight));
+                
+                let targetRows = [];
+                if (filterMode === 'top20') {
+                    // 只顯示前 20 大持股
+                    targetRows = etfData.slice(0, 20);
+                } else if (filterMode === 'weight5') {
+                    // 成分股權重大於 5%
+                    targetRows = etfData.filter(d => Number(d.weight) >= 5);
+                }
+                
+                targetRows.forEach(r => {
+                    let sCode = r.stock;
+                    let sName = r.name || "未知個股";
+                    let weight = Number(r.weight);
+                    
+                    // 如果尚未建立過該股票節點，則初始化（預設不顯示標籤，保持視覺純淨）
+                    if (!nodesMap[sCode]) {
+                        nodesMap[sCode] = {
+                            id: sCode,
+                            name: sCode,
+                            value: sName,
+                            symbolSize: 20, // 外圍衛星個股較小
+                            isEtf: false,
+                            itemStyle: {
+                                color: '#00adb5',
+                                borderColor: '#fff',
+                                borderWidth: 1.5,
+                                shadowBlur: 6,
+                                shadowColor: 'rgba(0, 173, 181, 0.3)'
+                            },
+                            label: {
+                                show: false // 👑 規格要求：預設畫面上不顯示個股名稱
+                            }
+                        };
+                    }
+                    
+                    // 建立 ETF 與 股票 的連線（粗細代表持股權重）
+                    links.push({
+                        source: eCode,
+                        target: sCode,
+                        weightValue: weight,
+                        lineStyle: {
+                            width: Math.max(1.2, weight * 0.7), // 動態配比粗細
+                            opacity: 0.5
+                        }
+                    });
+                });
+            });
+            
+            let nodesArray = Object.values(nodesMap);
+            
+            // 5. 設定 ECharts 力導向物理參數
+            let option = {
+                title: {
+                    text: `籌碼拓撲星系圖 (觀測天軸: ${latestDate})`,
+                    left: 20, top: 20, textStyle: { fontSize: 14, color: '#4a5568', fontWeight: 600 }
+                },
+                tooltip: {
+                    trigger: 'item',
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                    borderColor: '#e2e8f0',
+                    borderWidth: 1,
+                    textStyle: { color: '#333' },
+                    formatter: function (params) {
+                        if (params.dataType === 'node') {
+                            if (params.data.isEtf) {
+                                return `<div class="p-1"><b>基金核心：${params.data.name}</b><br><span class="text-muted small">${params.data.value}</span></div>`;
+                            } else {
+                                return `<div class="p-1"><b>成分股：${params.data.name}</b><br><span class="text-muted small">${params.data.value}</span></div>`;
+                            }
+                        } else if (params.dataType === 'edge') {
+                            return `<div class="p-1">拓撲連線關係：<br><b>${params.data.source}</b> ➔ <b>${params.data.target}</b><br>持股權重：<span class="text-primary fw-bold">${params.data.weightValue.toFixed(2)}%</span></div>`;
+                        }
+                    }
+                },
+                series: [{
+                    type: 'graph',
+                    layout: 'force',
+                    data: nodesArray,
+                    links: links,
+                    roam: true, // 支援滾輪縮放與拖曳平移
+                    draggable: true,
+                    // 👑 規格要求：點擊核心/Hover 高亮連線群聚，暗化其餘無關節點
+                    emphasis: {
+                        focus: 'adjacency', 
+                        label: {
+                            show: true, // 👑 規格要求：滑鼠游標懸停（Hover）在節點上時才顯現個股名稱
+                            position: 'right',
+                            formatter: function(p) {
+                                return p.data.isEtf ? p.data.name : `${p.data.name} ${p.data.value}`;
+                            },
+                            color: '#1a202c',
+                            backgroundColor: '#ffffff',
+                            padding: [4, 8],
+                            borderRadius: 4,
+                            shadowBlur: 4,
+                            shadowColor: 'rgba(0,0,0,0.15)'
+                        },
+                        lineStyle: {
+                            width: 6,
+                            opacity: 1
+                        }
+                    },
+                    force: {
+                        repulsion: 220,       // 節點排斥力（彈跳感強度）
+                        edgeLength: [60, 160], // 連線長度範圍
+                        gravity: 0.06          // 向心引力
+                    },
+                    lineStyle: {
+                        color: 'source',       // 連線顏色跟隨 ETF 核心母體
+                        curveness: 0.05
+                    }
+                }]
+            };
+            
+            galaxyChartInstance.setOption(option);
+            galaxyChartInstance.resize();
+            
+            // 6. 👑 規格要求：點擊個股外圍節點彈出交叉持股 Bootstrap Modal 小視窗
+            galaxyChartInstance.off('click');
+            galaxyChartInstance.on('click', function (params) {
+                if (params.dataType === 'node') {
+                    if (params.data.isEtf) {
+                        // 如果點擊核心，預設觸發 ECharts Adjacency 高亮
+                        galaxyChartInstance.dispatchAction({
+                            type: 'highlight',
+                            seriesIndex: 0,
+                            dataIndex: params.dataIndex
+                        });
+                    } else {
+                        // 點擊的是外圍成分股
+                        let sCode = params.data.name;
+                        let sName = params.data.value;
+                        
+                        document.getElementById('galaxyStockModalLabel').innerHTML = `<i class="bi bi-intersect text-primary me-2"></i><b>${sCode} - ${sName}</b> 的交叉星系抱緊聯動`;
+                        
+                        let modalTableHtml = "";
+                        // 過濾出目前所有被選中且「確實持有此股票」的 ETF
+                        checkedEtfs.forEach(eCode => {
+                            let match = globalRawData.find(x => x.date === latestDate && x.etf === eCode && x.stock === sCode);
+                            if (match) {
+                                let w = Number(match.weight);
+                                let mappedEtfName = etfNameMappingData[eCode] || "未知名稱";
+                                modalTableHtml += `<tr>
+                                    <td><span class="badge bg-light text-dark border font-monospace me-2">${eCode}</span> <b>${mappedEtfName}</b></td>
+                                    <td class="text-end font-monospace text-danger fw-bold fs-5">${w.toFixed(2)}%</td>
+                                </tr>`;
+                            }
+                        });
+                        
+                        document.getElementById('galaxyModalTableBody').innerHTML = modalTableHtml || '<tr><td colspan="2" class="text-center text-muted">目前選定的 ETF 陣容中無基金持有此股票</td></tr>';
+                        
+                        // 呼叫 Bootstrap 原生 Modal
+                        let myModal = new bootstrap.Modal(document.getElementById('galaxyStockModal'));
+                        myModal.show();
+                    }
+                }
+            });
+        }
+
+        // 監聽視窗縮放
+        window.addEventListener('resize', function() {
+            if(galaxyChartInstance) galaxyChartInstance.resize();
+        });
 
         function selectEtf(etfName) {
             selectedEtf = etfName;
@@ -1051,7 +1355,6 @@ def main():
             calculateChipsDelta(etfName, sortedDates);
         }
 
-        // 👑 修正優化 2 & 3：深度重構連續動向算法（基準日動態對位、並降低連續天數判定門檻捕捉首日變動）
         function calculateChipsDelta(etfName, sortedDates) {
             let type = document.getElementById('rangeType').value;
             let dOld = null, dNew = null;
@@ -1076,13 +1379,11 @@ def main():
             let rowsOld = etfData.filter(d => d.date === dOld);
             let rowsNew = etfData.filter(d => d.date === dNew);
 
-            // 動態取得當前選定新日期（dNew）在歷史時間軸中的正確陣列索引位置
             let idxNew = sortedDates.indexOf(dNew);
             if (idxNew < 0) idxNew = sortedDates.length - 1;
 
             let trendMap = {};
             if (sortedDates.length >= 2) {
-                // 從全歷史資料安全比對篩選出正常個股
                 let uniqStocks = [...new Set(etfData.map(d => d.stock))].filter(sCode => {
                     let match = etfData.find(d => d.stock === sCode);
                     return match ? isNormalStock(match.stock, match.name) : false;
@@ -1092,7 +1393,6 @@ def main():
                     let streakCount = 0;
                     let currentTrend = null;
                     
-                    // 以 idxNew 為軸心，動態向歷史過去推算連續天數
                     for (let i = idxNew; i > 0; i--) {
                         let dateN = sortedDates[i];
                         let dateO = sortedDates[i - 1];
@@ -1115,7 +1415,6 @@ def main():
                         }
                     }
                     
-                    // 門檻修正為 >= 1，確保不漏掉首日剛發生加減碼的焦點股
                     if (streakCount >= 1 && currentTrend) { 
                         trendMap[sCode] = '連' + currentTrend + streakCount + '日'; 
                     }
@@ -1311,7 +1610,7 @@ def main():
                 }
                 let latestDate = dates[dates.length - 1];
                 let lRow = etfData.find(d => d.date === latestDate && d.stock === sCode);
-                if (lRow) { weightRows.push({ etf: eCode, name: etfNameMappingData[eCode] || "未知名稱", weight: Number(lRow.weight) }); }
+                if (lRow) { weightRows.push({ eCode: eCode, name: etfNameMappingData[eCode] || "未知名稱", weight: Number(lRow.weight) }); }
             });
 
             let trendStatusEl = document.getElementById('trendStockStatus');
@@ -1321,7 +1620,7 @@ def main():
             totalVolEl.className = `fw-bold font-monospace mb-0 ${totalDiff > 0 ? 'text-danger' : 'text-success'}`;
 
             let changeHtml = distRows.sort((a,b)=>b.diff - a.diff).map(x => `<tr><td><b>${x.etf}</b> <span class="text-muted small">${x.name}</span></td><td class="text-end font-monospace fw-bold ${x.diff > 0 ? 'text-danger' : 'text-success'}">${x.diff > 0 ? '+' : ''}${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
-            let weightHtml = weightRows.sort((a,b)=>b.weight - a.weight).map(x => `<tr><td class="font-monospace fw-bold">${x.etf}</td><td class="fw-bold text-secondary">${x.name}</td><td class="text-end font-monospace text-primary fw-bold">${x.weight.toFixed(2)}%</td></tr>`).join('');
+            let weightHtml = weightRows.sort((a,b)=>b.weight - a.weight).map(x => `<tr><td class="font-monospace fw-bold">${x.eCode}</td><td class="fw-bold text-secondary">${x.name}</td><td class="text-end font-monospace text-primary fw-bold">${x.weight.toFixed(2)}%</td></tr>`).join('');
 
             document.getElementById('stockDistBody').innerHTML = changeHtml || `<tr><td colspan="2" class="text-center text-muted py-3">近一日無經理人在此標的進行調整變動</td></tr>`;
             document.getElementById('stockDistBody2').innerHTML = weightHtml || `<tr><td colspan="3" class="text-center text-muted py-3">全市場無 ETF 持有此股票標的</td></tr>`;
@@ -1615,7 +1914,7 @@ def main():
         "__ETF_NAME_PLACEHOLDER__", etf_name_json
     )
 
-    components.html(final_html, height=1200, scrolling=True)
+    components.html(final_html, height=1250, scrolling=True)
 
 if __name__ == "__main__":
     main()
