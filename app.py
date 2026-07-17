@@ -36,7 +36,7 @@ WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
 
-# FinMind API 金鑰（可放於 st.secrets 或環境變數中，若無則使用免費限制額度）
+# FinMind API 金鑰
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 
 # ==========================================
@@ -137,16 +137,15 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. FinMind PBR 批次查詢與快取（自動過濾美股/非台股）
+# 3. FinMind PBR/PER 批次查詢與快取（自動過濾非台股）
 # ==========================================
-@st.cache_data(ttl=3600)  # 快取 1 小時，確保每小時呼叫次數極低，安全壓在 600 次限制內
-def fetch_pbr_weights_cached(stock_codes, date_str):
+@st.cache_data(ttl=3600)  # 快取 1 小時
+def fetch_valuation_weights_cached(stock_codes, date_str):
     """
-    批次或單次查詢台灣個股的 PBR 數據。
-    自動過濾非台股格式（純數字且長度為4至6碼），避免浪費 FinMind 額度。
+    批次或單次查詢台灣個股的 PBR/PER 數據。
+    自動過濾非台股格式，確保每小時呼叫次數在安全限制內。
     """
     valid_stocks = []
-    # 嚴格正則表達式過濾：只允許純數字的台股代號（如 2330, 2454 等）
     for code in stock_codes:
         clean_code = str(code).strip()
         if re.match(r"^\d{4,6}$", clean_code):
@@ -155,9 +154,9 @@ def fetch_pbr_weights_cached(stock_codes, date_str):
     if not valid_stocks:
         return {}
 
-    pbr_results = {}
+    valuation_results = {}
     
-    # 採取批次查詢，一次處理所有有效股票以節省 API 呼叫次數
+    # 採取批次查詢
     for code in valid_stocks:
         url = "https://api.finmindtrade.com/api/v4/data"
         params = {
@@ -174,12 +173,15 @@ def fetch_pbr_weights_cached(stock_codes, date_str):
             if res.status_code == 200:
                 data = res.json().get("data", [])
                 if data:
-                    # 取得最後一筆 PBR (股淨比)
-                    pbr_results[code] = data[-1].get("pbr", 0.0)
+                    # 取得最後一筆的 pbr (股淨比) 與 per (本益比)
+                    valuation_results[code] = {
+                        "pbr": data[-1].get("pbr", 0.0),
+                        "per": data[-1].get("per", 0.0)
+                    }
         except Exception as e:
             print(f"FinMind API 連線失敗 ({code}): {e}")
             
-    return pbr_results
+    return valuation_results
 
 # ==========================================
 # 4. 外部即時行情 API 整合模組
@@ -295,18 +297,18 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    # 💡 整合 FinMind 快取計算：找出最新日期，批次獲取 PBR 資料
+    # 💡 整合 FinMind 估值計算
     try:
         latest_date = df['date'].max()
         unique_stocks = df['stock'].unique().tolist()
-        # 自動過濾非台股 & 快取一小時，安全控制 API 頻率不超載
-        pbr_map = fetch_pbr_weights_cached(unique_stocks, latest_date)
+        val_map = fetch_valuation_weights_cached(unique_stocks, latest_date)
         
-        # 將 PBR 資料併入 records
-        df['pbr'] = df['stock'].map(pbr_map).fillna(0.0)
+        df['pbr'] = df['stock'].apply(lambda x: val_map.get(x, {}).get("pbr", 0.0))
+        df['per'] = df['stock'].apply(lambda x: val_map.get(x, {}).get("per", 0.0))
     except Exception as e:
         print(f"FinMind 數據併入失敗: {e}")
         df['pbr'] = 0.0
+        df['per'] = 0.0
     
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map
@@ -581,7 +583,13 @@ def main():
           <!-- 📡 升級頁面：主動型經理人共識雷達 -->
           <div class="custom-tab-content" id="content-g">
             <div class="card p-3 mb-4 bg-light border">
-              <div class="fw-bold text-dark mb-2"><i class="bi bi-check2-square me-1"></i>選取欲納入共識雷達分析範疇的主動式 ETF（預設全不選）：</div>
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="fw-bold text-dark"><i class="bi bi-check2-square me-1"></i>選取欲納入共識雷達分析範疇的主動式 ETF（預設全不選）：</div>
+                <div>
+                  <button class="btn btn-sm btn-outline-primary me-2" onclick="selectAllRadar()"><i class="bi bi-check-all me-1"></i>全選</button>
+                  <button class="btn btn-sm btn-outline-secondary" onclick="clearAllRadar()"><i class="bi bi-x-square me-1"></i>全不選</button>
+                </div>
+              </div>
               <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="radarCheckboxContainer"></div>
               
               <div class="row align-items-center g-3 mt-2">
@@ -624,7 +632,7 @@ def main():
                       <thead>
                         <tr>
                           <th>股票標的</th>
-                          <th class="text-end">共識家數</th>
+                          <th class="text-end" style="width: 150px;">共識比例 / 家數</th>
                           <th class="px-4">詳細加碼主要陣容</th>
                         </tr>
                       </thead>
@@ -645,7 +653,7 @@ def main():
                       <thead>
                         <tr>
                           <th>股票標的</th>
-                          <th class="text-end">警示家數</th>
+                          <th class="text-end" style="width: 150px;">警示比例 / 家數</th>
                           <th class="px-4">詳細減持主要陣容</th>
                         </tr>
                       </thead>
@@ -692,6 +700,18 @@ def main():
                     <div class="meta-card" style="border-left-color: #dd6b20;">
                       <div class="meta-label">成交量</div>
                       <div class="meta-value" id="metaVolume">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #319795;">
+                      <div class="meta-label">台股加權平均本益比</div>
+                      <div class="meta-value text-teal" id="metaWeightedPer">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #805ad5;">
+                      <div class="meta-label">台股加權平均股淨比</div>
+                      <div class="meta-value text-purple" id="metaWeightedPbr">-</div>
                     </div>
                   </div>
                 </div>
@@ -743,7 +763,13 @@ def main():
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
-                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th>PBR (股淨比)</th><th>最新持股(股)</th></tr>
+                            <tr>
+                              <th>股票代號</th>
+                              <th>股票名稱</th>
+                              <th class="text-end">持股權重</th>
+                              <th class="text-end">持股股數</th>
+                              <th class="text-end">本益比</th>
+                            </tr>
                           </thead>
                           <tbody id="stockTableBody"></tbody>
                         </table>
@@ -1145,7 +1171,7 @@ def main():
                 listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
                 compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 
-                // 📡 共識雷達：預設不選（checked屬性已移除）
+                // 📡 共識雷達：預設不選
                 radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
 
                 let price = "-";
@@ -1182,8 +1208,18 @@ def main():
         }
 
         // ==========================================
-        // 📡 核心運算：主動型經理人共識雷達 (黃金共識 / 避險警示)
+        // 📡 核心優化：主動型經理人共識雷達
         // ==========================================
+        function selectAllRadar() {
+            document.querySelectorAll('.radar-cb').forEach(cb => cb.checked = true);
+            calculateRadarConsensus();
+        }
+
+        function clearAllRadar() {
+            document.querySelectorAll('.radar-cb').forEach(cb => cb.checked = false);
+            calculateRadarConsensus();
+        }
+
         function toggleRadarCustomDates() {
             let type = document.getElementById('radarRangeType').value;
             document.getElementById('radarCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
@@ -1199,7 +1235,7 @@ def main():
 
             let type = document.getElementById('radarRangeType').value;
             let goldMap = {}; // 股數增加
-            let warningMap = {}; // 股數減少或完全被剔除
+            let warningMap = {}; // 股數減少或被剔除
 
             checkedEtfs.forEach(eCode => {
                 let etfData = globalRawData.filter(d => d.etf === eCode);
@@ -1260,20 +1296,34 @@ def main():
                 return { code: code, name: name, etfs: warningMap[k] };
             }).sort((a,b) => b.etfs.length - a.etfs.length);
 
+            let totalChecked = checkedEtfs.length;
+
             let goldHtml = goldArray.map(x => {
                 let listChips = x.etfs.map(e => `<span class="badge bg-light text-danger border me-1"><b>${e}</b></span>`).join('');
+                let strengthPct = Math.round((x.etfs.length / totalChecked) * 100);
                 return `<tr>
                     <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                    <td class="text-end font-monospace fw-bold text-danger fs-5">${x.etfs.length} 檔</td>
+                    <td class="text-end">
+                      <span class="font-monospace fw-bold text-danger fs-6">${x.etfs.length} / ${totalChecked} 檔</span>
+                      <div class="progress mt-1" style="height: 4px; background-color: #fee2e2;">
+                        <div class="progress-bar bg-danger" role="progressbar" style="width: ${strengthPct}%"></div>
+                      </div>
+                    </td>
                     <td class="px-4">${listChips}</td>
                 </tr>`;
             }).join('');
 
             let warningHtml = warningArray.map(x => {
                 let listChips = x.etfs.map(e => `<span class="badge bg-light text-secondary border me-1"><b>${e}</b></span>`).join('');
+                let strengthPct = Math.round((x.etfs.length / totalChecked) * 100);
                 return `<tr>
                     <td class="fw-bold text-secondary">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                    <td class="text-end font-monospace fw-bold text-muted fs-5">${x.etfs.length} 檔</td>
+                    <td class="text-end">
+                      <span class="font-monospace fw-bold text-muted fs-6">${x.etfs.length} / ${totalChecked} 檔</span>
+                      <div class="progress mt-1" style="height: 4px; background-color: #e2e8f0;">
+                        <div class="progress-bar bg-secondary" role="progressbar" style="width: ${strengthPct}%"></div>
+                      </div>
+                    </td>
                     <td class="px-4">${listChips}</td>
                 </tr>`;
             }).join('');
@@ -1290,7 +1340,7 @@ def main():
             let oldRows = etfData.filter(d => d.date === dOld);
             let newRows = etfData.filter(d => d.date === dNew);
 
-            // 1. 換股率計算 (權重變動估算法： 0.5 * Sum(|W_new - W_old|))
+            // 1. 換股率計算 (權重變動估算法)
             let allStockTokens = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])];
             let absWeightDiffSum = 0;
 
@@ -1320,7 +1370,7 @@ def main():
 
             // 2. 核心持股與衛星持股判定
             let totalObservedDays = sortedDates.length;
-            let occurrenceMap = {}; // 計算股票出現天數
+            let occurrenceMap = {};
 
             sortedDates.forEach(d => {
                 let dayRows = etfData.filter(x => x.date === d);
@@ -1335,7 +1385,6 @@ def main():
             let coreHtml = "";
             let satelliteHtml = "";
 
-            // 遍歷所有歷史有出現過的標的進行歸類診斷
             let allHistoricalStocks = Object.keys(occurrenceMap);
             allHistoricalStocks.forEach(sCode => {
                 let appearanceRate = occurrenceMap[sCode] / totalObservedDays;
@@ -1343,11 +1392,9 @@ def main():
                 let currentWeight = lRow ? Number(lRow.weight) : 0;
                 let sName = lRow ? lRow.name : (etfData.find(x => x.stock === sCode)?.name || "歷史成分股");
 
-                // 核心持股條件：最新持股權重 >= 5% 且 歷史天數比例 >= 80%
                 if (currentWeight >= 5 && appearanceRate >= 0.8) {
                     coreHtml += `<span class="badge bg-danger text-white m-1 p-2" title="歷史持倉率: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
                 }
-                // 衛星波段條件：最新持股權重 < 2% 且 歷史出現比例 < 30%
                 else if (currentWeight < 2 && appearanceRate < 0.3 && currentWeight > 0) {
                     satelliteHtml += `<span class="badge bg-info text-dark m-1 p-2" title="歷史持倉率: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
                 }
@@ -1401,10 +1448,45 @@ def main():
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
 
+            // ==================================================
+            // 💡 僅針對台股部位進行重構重新歸一化（Re-normalize）加權
+            // ==================================================
+            let totalTwWeightPer = 0;
+            let totalTwWeightPbr = 0;
+            let weightedPerSum = 0;
+            let weightedPbrSum = 0;
+
             stocks.forEach(r => {
-                let pbrVal = r.pbr ? Number(r.pbr).toFixed(2) : "-";
-                sHtml += `<tr><td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td><td class="fw-bold">${r.name}</td><td class="text-end font-monospace text-primary fw-bold">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace text-info">${pbrVal}</td><td class="text-end font-monospace text-secondary">${Math.round(r.volume).toLocaleString()}</td></tr>`;
+                let perVal = r.per ? Number(r.per) : 0;
+                let pbrVal = r.pbr ? Number(r.pbr) : 0;
+                let w = Number(r.weight);
+                
+                if (perVal > 0) {
+                    weightedPerSum += perVal * w;
+                    totalTwWeightPer += w;
+                }
+                if (pbrVal > 0) {
+                    weightedPbrSum += pbrVal * w;
+                    totalTwWeightPbr += w;
+                }
+
+                // 渲染至持股成分股明細表（依照：股票代號 股票名稱 持股權重 持股股數 本益比 順序呈現）
+                let displayPer = (perVal > 0) ? perVal.toFixed(2) : "-";
+                sHtml += `<tr>
+                    <td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td>
+                    <td class="fw-bold">${r.name}</td>
+                    <td class="text-end font-monospace text-primary fw-bold">${Number(r.weight).toFixed(2)}%</td>
+                    <td class="text-end font-monospace text-secondary">${Math.round(r.volume).toLocaleString()}</td>
+                    <td class="text-end font-monospace text-info fw-bold">${displayPer}</td>
+                </tr>`;
             });
+
+            // 計算加權平均估值並動態塞回卡片中
+            let weightedPer = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
+            let weightedPbr = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
+            document.getElementById('metaWeightedPer').innerText = weightedPer;
+            document.getElementById('metaWeightedPbr').innerText = weightedPbr;
+
             assets.forEach(r => {
                 aHtml += `<tr><td><span class="badge bg-light text-muted font-monospace border">${r.stock || '-'}</span></td><td class="text-muted">${r.name}</td><td class="text-end font-monospace">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace">${Math.round(r.volume).toLocaleString()}</td></tr>`;
             });
@@ -1414,7 +1496,7 @@ def main():
 
             // 預設將時間拉回 20 日區間
             if (sortedDates.length >= 2) {
-                let defaultOldIdx = Math.max(0, sortedDates.length - 21); // 扣掉首尾共有20筆區間
+                let defaultOldIdx = Math.max(0, sortedDates.length - 21);
                 document.getElementById('startDateInput').value = sortedDates[defaultOldIdx];
                 document.getElementById('endDateInput').value = sortedDates[sortedDates.length - 1];
             }
@@ -1442,7 +1524,6 @@ def main():
 
             if(!dOld || !dNew) return;
 
-            // 執行風格診斷回調
             runManagerStyleDiagnosis(etfName, dOld, dNew, sortedDates);
 
             let rowsOld = etfData.filter(d => d.date === dOld);
@@ -1508,7 +1589,6 @@ def main():
                 if (oVol === 0 && nVol > 0) nature = "NEW";
                 else if (oVol > 0 && nVol === 0) nature = "DELETE";
                 else if (diff > 0) {
-                    // 規則 2：顯著加碼定義為該個股權重占 ETF 規模變動 > 0.5%
                     nature = (wDiff > 0.5) ? "STRONG_UP" : "UP";
                 }
                 else if (diff < 0) nature = "DOWN";
