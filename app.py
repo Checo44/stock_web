@@ -11,7 +11,7 @@ import re
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
-st.set_page_config(page_title="ETF 籌碼大數據監监控面板", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
@@ -635,7 +635,7 @@ def main():
                   </div>
                 </div>
 
-                <!-- 💡 新增嵌入元件：單檔經理人風格與持股診斷卡片 -->
+                <!-- 💡 嵌入元件：單檔經理人風格與持股診斷卡片 -->
                 <div class="card mb-4 border-start border-primary border-4 shadow-sm" id="diagnosticCard" style="display:none;">
                   <div class="card-header bg-white font-weight-bold text-dark"><i class="bi bi-clipboard-pulse text-primary me-2"></i>經理人投資風格與持股診斷</div>
                   <div class="card-body">
@@ -650,7 +650,7 @@ def main():
                         <div class="small text-secondary font-monospace fw-bold" id="txtDiagnosticInterval">-</div>
                       </div>
                     </div>
-                    <div class="row g-3">
+                    <div class="row g-3 mb-3">
                       <div class="col-md-6">
                         <div class="p-2 border rounded bg-light" style="max-height: 200px; overflow-y:auto;">
                           <div class="fw-bold text-danger small border-bottom pb-1 mb-2"><i class="bi bi-shield-lock-fill me-1"></i>核心持股 (最新權重≥5% & 歷史出現率≥80%)</div>
@@ -662,6 +662,14 @@ def main():
                           <div class="fw-bold text-info small border-bottom pb-1 mb-2"><i class="bi bi-rocket-takeoff-fill me-1"></i>衛星波段持股 (最新權重&lt;2% & 歷史出現率&lt;30%)</div>
                           <div class="d-flex flex-wrap gap-1" id="boxSatelliteList"></div>
                         </div>
+                      </div>
+                    </div>
+                    
+                    <!-- 系統備註與限制公告區 -->
+                    <div class="alert alert-secondary mb-0 py-2 px-3 small border-0" style="background-color: #f8fafc; color: #64748b;">
+                      <div class="row g-2">
+                        <div class="col-md-6"><i class="bi bi-info-circle-fill me-1 text-primary"></i><b>顯著加碼標準：</b>異動股數增加且權重變動大於該規模的 0.5%（目前尚無加入大盤基準值）。</div>
+                        <div class="col-md-6"><i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i><b>持倉成本說明：</b>當前公開大數據與試算表數據源中，無經理人實際持股成本資料。</div>
                       </div>
                     </div>
                   </div>
@@ -734,7 +742,7 @@ def main():
                         <tr>
                           <th>股票標的</th>
                           <th>異動屬性</th>
-                          <th class="text-end">張數 / 股數增減變動</th>
+                          <th class="text-end">張數 / 股數增減變動 (權重異動)</th>
                           <th class="px-4">經理人連續操作動向</th>
                         </tr>
                       </thead>
@@ -1221,7 +1229,7 @@ def main():
             let oldRows = etfData.filter(d => d.date === dOld);
             let newRows = etfData.filter(d => d.date === dNew);
 
-            // 1. 換股率計算 (學術權重變動估算法： 0.5 * Sum(|W_new - W_old|))
+            // 1. 換股率計算 (權重變動估算法： 0.5 * Sum(|W_new - W_old|))
             let allStockTokens = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])];
             let absWeightDiffSum = 0;
 
@@ -1426,22 +1434,33 @@ def main():
                 let nRow = rowsNew.find(x => x.stock === sCode);
                 let oVol = oRow ? Number(oRow.volume) : 0;
                 let nVol = nRow ? Number(nRow.volume) : 0;
+                
+                let oW = oRow ? Number(oRow.weight) : 0;
+                let nW = nRow ? Number(nRow.weight) : 0;
+                
                 let diff = nVol - oVol;
+                let wDiff = nW - oW;
                 let name = nRow ? nRow.name : (oRow ? oRow.name : "");
                 let nature = "";
+                
                 if (oVol === 0 && nVol > 0) nature = "NEW";
                 else if (oVol > 0 && nVol === 0) nature = "DELETE";
-                else if (diff > 0) nature = "UP";
+                else if (diff > 0) {
+                    // 規則 2：顯著加碼定義為該個股權重占 ETF 規模變動 > 0.5%
+                    nature = (wDiff > 0.5) ? "STRONG_UP" : "UP";
+                }
                 else if (diff < 0) nature = "DOWN";
                 else nature = "NONE";
-                return { stock: sCode, name: name, diff: diff, nature: nature };
+                
+                return { stock: sCode, name: name, diff: diff, wDiff: wDiff, nature: nature };
             }).filter(x => x.nature !== "NONE");
 
-            let htmlNew = "", htmlAdd = "", htmlSub = "", htmlDel = "";
+            let htmlNew = "", htmlStrongAdd = "", htmlAdd = "", htmlSub = "", htmlDel = "";
             changes.sort((a,b) => b.diff - a.diff).forEach(r => {
                 let badge = "";
                 let dStyle = "";
                 if(r.nature === "NEW") { badge = `<span class="badge-nature-new">🆕 新增納入</span>`; dStyle = "color:#ea580c;"; }
+                else if(r.nature === "STRONG_UP") { badge = `<span class="badge bg-danger text-white" style="padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">🔥 顯著加碼</span>`; dStyle = "color:#b91c1c; font-weight: bold;"; }
                 else if(r.nature === "UP") { badge = `<span class="badge-nature-up">🔺 經理人加碼</span>`; dStyle = "color:#dc2626;"; }
                 else if(r.nature === "DOWN") { badge = `<span class="badge-nature-down">🔻 經理人減持</span>`; dStyle = "color:#0f766e;"; }
                 else if(r.nature === "DELETE") { badge = `<span class="badge-nature-delete">❌ 完整剔除</span>`; dStyle = "color:#4b5563;"; }
@@ -1451,15 +1470,17 @@ def main():
                 if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
                 if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
 
-                let rowHtml = `<tr><td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td><td>${badge}</td><td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(r.diff).toLocaleString()} 股</td><td class="px-4">${trendHtml}</td></tr>`;
+                let wDiffText = r.wDiff !== 0 ? ` (${r.wDiff > 0 ? '+' : ''}${r.wDiff.toFixed(2)}%)` : '';
+                let rowHtml = `<tr><td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td><td>${badge}</td><td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(r.diff).toLocaleString()} 股${wDiffText}</td><td class="px-4">${trendHtml}</td></tr>`;
                 
                 if(r.nature === "NEW") htmlNew += rowHtml;
+                else if(r.nature === "STRONG_UP") htmlStrongAdd += rowHtml;
                 else if(r.nature === "UP") htmlAdd += rowHtml;
                 else if(r.nature === "DOWN") htmlSub += rowHtml;
                 else if(r.nature === "DELETE") htmlDel += rowHtml;
             });
 
-            document.getElementById('changeTableBody').innerHTML = (htmlNew + htmlAdd + htmlSub + htmlDel) || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量與持有股數未發生任何變動</td></tr>';
+            document.getElementById('changeTableBody').innerHTML = (htmlNew + htmlStrongAdd + htmlAdd + htmlSub + htmlDel) || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量與持有股數未發生任何變動</td></tr>';
         }
 
         function toggleCustomDates() {
