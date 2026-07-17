@@ -7,6 +7,7 @@ import json
 import os
 import requests
 import re
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -137,13 +138,14 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. FinMind PBR/PER 批次查詢與快取（自動過濾非台股）
+# 3. FinMind PBR/PER 批次查詢與快取（自動過濾非台股與回溯容錯機制）
 # ==========================================
 @st.cache_data(ttl=3600)  # 快取 1 小時
 def fetch_valuation_weights_cached(stock_codes, date_str):
     """
     批次或單次查詢台灣個股的 PBR/PER 數據。
     自動過濾非台股格式，確保每小時呼叫次數在安全限制內。
+    使用 7 天回溯容錯，防止假日或延遲無數據。
     """
     valid_stocks = []
     for code in stock_codes:
@@ -154,15 +156,23 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     if not valid_stocks:
         return {}
 
+    # 計算回溯一週的 start_date 降低延遲/假日空數據的風險
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        start_dt = dt - timedelta(days=7)
+        start_date_str = start_dt.strftime("%Y-%m-%d")
+    except Exception:
+        start_date_str = date_str
+
     valuation_results = {}
     
     # 採取批次查詢
     for code in valid_stocks:
         url = "https://api.finmindtrade.com/api/v4/data"
         params = {
-            "dataset": "taiwan_stock_per_pbr",
+            "dataset": "TaiwanStockPER",  # 修正為正確的 FinMind API 資料集名稱
             "data_id": code,
-            "start_date": date_str,
+            "start_date": start_date_str,
             "end_date": date_str,
         }
         if FINMIND_TOKEN:
@@ -173,10 +183,11 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
             if res.status_code == 200:
                 data = res.json().get("data", [])
                 if data:
-                    # 取得最後一筆的 pbr (股淨比) 與 per (本益比)
+                    # 取得區間內最新一筆的 PBR 與 PER (FinMind 回傳欄位預設是大寫)
+                    last_record = data[-1]
                     valuation_results[code] = {
-                        "pbr": data[-1].get("pbr", 0.0),
-                        "per": data[-1].get("per", 0.0)
+                        "pbr": float(last_record.get("PBR", last_record.get("pbr", 0.0)) or 0.0),
+                        "per": float(last_record.get("PER", last_record.get("per", 0.0)) or 0.0)
                     }
         except Exception as e:
             print(f"FinMind API 連線失敗 ({code}): {e}")
@@ -580,7 +591,7 @@ def main():
             </div>
           </div>
 
-          <!-- 📡 升級頁面：主動型經理人共識雷達 -->
+          <!-- 📡 主動型經理人共識雷達 -->
           <div class="custom-tab-content" id="content-g">
             <div class="card p-3 mb-4 bg-light border">
               <div class="d-flex justify-content-between align-items-center mb-2">
@@ -731,26 +742,31 @@ def main():
                         <div class="small text-secondary font-monospace fw-bold" id="txtDiagnosticInterval">-</div>
                       </div>
                     </div>
+                    
+                    <!-- 經理人持股分類盒 -->
                     <div class="row g-3 mb-3">
                       <div class="col-md-6">
                         <div class="p-2 border rounded bg-light" style="max-height: 200px; overflow-y:auto;">
-                          <div class="fw-bold text-danger small border-bottom pb-1 mb-2"><i class="bi bi-shield-lock-fill me-1"></i>核心持股 (最新權重≥5% & 歷史出現率≥80%)</div>
+                          <div class="fw-bold text-danger small border-bottom pb-1 mb-2"><i class="bi bi-shield-lock-fill me-1"></i>核心持股 (最新權重≥4% & 歷史出現率≥80%)</div>
                           <div class="d-flex flex-wrap gap-1" id="boxCoreList"></div>
                         </div>
                       </div>
                       <div class="col-md-6">
                         <div class="p-2 border rounded bg-light" style="max-height: 200px; overflow-y:auto;">
-                          <div class="fw-bold text-info small border-bottom pb-1 mb-2"><i class="bi bi-rocket-takeoff-fill me-1"></i>衛星波段持股 (最新權重&lt;2% & 歷史出現率&lt;30%)</div>
+                          <div class="fw-bold text-info small border-bottom pb-1 mb-2"><i class="bi bi-rocket-takeoff-fill me-1"></i>衛星波段持股 (最新權重&lt;2% & 歷史出現率&lt;40%)</div>
                           <div class="d-flex flex-wrap gap-1" id="boxSatelliteList"></div>
                         </div>
                       </div>
                     </div>
                     
+                    <!-- 💡 經理人進階量化與調倉分析 (動態產生內容) -->
+                    <div id="diagResultTextContainer" class="border-top pt-3 mt-3"></div>
+                    
                     <!-- 系統備註與限制公告區 -->
-                    <div class="alert alert-secondary mb-0 py-2 px-3 small border-0" style="background-color: #f8fafc; color: #64748b;">
+                    <div class="alert alert-secondary mb-0 py-2 px-3 mt-3 small border-0" style="background-color: #f8fafc; color: #64748b;">
                       <div class="row g-2">
                         <div class="col-md-6"><i class="bi bi-info-circle-fill me-1 text-primary"></i><b>顯著加碼標準：</b>異動股數增加且權重變動大於該規模的 0.5%（目前尚無加入大盤基準值）。</div>
-                        <div class="col-md-6"><i class="bi bi-exclamation-triangle-fill me-1 text-warning"></i><b>持倉成本說明：</b>當前公開大數據與試算表數據源中，無經理人實際持股成本資料。</div>
+                        <div class="col-md-6"><i class="bi_exclamation-triangle-fill me-1 text-warning"></i><b>持倉成本說明：</b>當前公開大數據與試算表數據源中，無經理人實際持股成本資料。</div>
                       </div>
                     </div>
                   </div>
@@ -792,7 +808,7 @@ def main():
                   </div>
                 </div>
                 
-                <div class="card p-3 mb-4 bg-light border">
+                <div class="card p-3 mb-4 mt-4 bg-light border">
                   <div class="row align-items-center g-3">
                     <div class="col-md-4">
                       <label class="form-label fw-bold text-dark"><i class="bi bi-calendar-range me-1"></i>籌碼比較天數 / 範圍</label>
@@ -1171,7 +1187,6 @@ def main():
                 listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
                 compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 
-                // 📡 共識雷達：預設不選
                 radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
 
                 let price = "-";
@@ -1208,7 +1223,7 @@ def main():
         }
 
         // ==========================================
-        // 📡 核心優化：主動型經理人共識雷達
+        // 📡 經理人共識雷達
         // ==========================================
         function selectAllRadar() {
             document.querySelectorAll('.radar-cb').forEach(cb => cb.checked = true);
@@ -1234,8 +1249,8 @@ def main():
             }
 
             let type = document.getElementById('radarRangeType').value;
-            let goldMap = {}; // 股數增加
-            let warningMap = {}; // 股數減少或被剔除
+            let goldMap = {}; 
+            let warningMap = {}; 
 
             checkedEtfs.forEach(eCode => {
                 let etfData = globalRawData.filter(d => d.etf === eCode);
@@ -1285,7 +1300,6 @@ def main():
                 });
             });
 
-            // 轉化為陣列排序呈現
             let goldArray = Object.keys(goldMap).map(k => {
                 let [code, name] = k.split("||");
                 return { code: code, name: name, etfs: goldMap[k] };
@@ -1333,12 +1347,16 @@ def main():
         }
 
         // ==========================================
-        // 💡 診斷核心與換股率分析 (嵌入在單檔分頁 Tab A)
+        // 💡 診斷核心：經理人投資風格與持股診斷詳細統整
         // ==========================================
         function runManagerStyleDiagnosis(etfName, dOld, dNew, sortedDates) {
             let etfData = globalRawData.filter(d => d.etf === etfName);
             let oldRows = etfData.filter(d => d.date === dOld);
             let newRows = etfData.filter(d => d.date === dNew);
+
+            if (oldRows.length === 0 || newRows.length === 0) {
+                return;
+            }
 
             // 1. 換股率計算 (權重變動估算法)
             let allStockTokens = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])];
@@ -1356,19 +1374,69 @@ def main():
             document.getElementById('txtTurnoverRate').innerText = turnoverRate.toFixed(2) + "%";
             document.getElementById('txtDiagnosticInterval').innerText = `${dOld} 至 ${dNew}`;
 
-            let badge = document.getElementById('badgeStyleTag');
-            if (turnoverRate < 10) {
-                badge.innerText = "長期價值投資（低周轉）";
-                badge.className = "badge bg-success";
-            } else if (turnoverRate <= 30) {
-                badge.innerText = "穩健動態調整（中周轉）";
-                badge.className = "badge bg-primary";
+            // 2. 風格定位解析
+            let styleTagText = "";
+            let styleTagClass = "";
+            let styleDescription = "";
+            if (turnoverRate < 5) {
+                styleTagText = "超低頻價值長抱流派 (周轉率 < 5%)";
+                styleTagClass = "bg-success";
+                styleDescription = "此基金高度看好核心組合，幾近無換股動作。經理人採取純粹的買入並持有（Buy and Hold）策略，追求長期基本面資產增值。";
+            } else if (turnoverRate < 15) {
+                styleTagText = "穩健長期價值投資 (周轉率 5%~15%)";
+                styleTagClass = "bg-success-subtle text-success border border-success";
+                styleDescription = "調倉動作極其精準克制，僅在成分股權重偏離過大時進行再平衡或基本面微調。典型的價值投資與穩健型主動管理。";
+            } else if (turnoverRate <= 35) {
+                styleTagText = "動態靈活戰術調整 (周轉率 15%~35%)";
+                styleTagClass = "bg-primary";
+                styleDescription = "操作風格靈活！經理人會根據季度營收、法說會預期與產業週期，積極進行中等幅度的再平衡佈局，力求兼顧長期與中短期獲利。";
             } else {
-                badge.innerText = "高頻波段交易（高周轉）";
-                badge.className = "badge bg-danger";
+                styleTagText = "積極高周轉波段流派 (周轉率 > 35%)";
+                styleTagClass = "bg-danger";
+                styleDescription = "持股周轉率極高！經理人非常主動地追逐市場高動能熱點，操作雷厲風行，高度偏好藉由短線波段操作與高頻調倉來獵取超額收益。";
             }
 
-            // 2. 核心持股與衛星持股判定
+            let badge = document.getElementById('badgeStyleTag');
+            badge.innerText = styleTagText;
+            badge.className = "badge " + styleTagClass + " fs-6 px-3 py-2";
+
+            // 3. 持股集中度 (Concentration Ratio)
+            let latestStocks = newRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
+            let top5Weight = 0;
+            let top10Weight = 0;
+            latestStocks.forEach((r, idx) => {
+                let w = Number(r.weight);
+                if (idx < 5) top5Weight += w;
+                if (idx < 10) top10Weight += w;
+            });
+
+            let concentrationText = "";
+            if (top5Weight > 45) {
+                concentrationText = `高度集中 (前五大持股佔比達 ${top5Weight.toFixed(1)}%)。採取重倉高信賴度押注策略，基金表現高度依賴少數核心主導權值股，爆發力強、波動度同等偏高。`;
+            } else if (top5Weight >= 30) {
+                concentrationText = `中度平衡集中 (前五大持股佔比為 ${top5Weight.toFixed(1)}%)。配置兼顧主力戰略部隊與風險分散，為業界公認兼具攻擊力與防守彈性的黃金配置比。`;
+            } else {
+                concentrationText = `高度廣泛分散 (前五大持股佔比僅 ${top5Weight.toFixed(1)}%)。操作採取普惠式配置，極力降低單一黑天鵝風險，其報酬軌跡將會與大盤基準表現高度貼合。`;
+            }
+
+            // 4. 加權估值定位 (Valuation Orientation)
+            let wPerText = document.getElementById('metaWeightedPer').innerText;
+            let wPbrText = document.getElementById('metaWeightedPbr').innerText;
+            let wPer = parseFloat(wPerText) || 0;
+            let wPbr = parseFloat(wPbrText) || 0;
+            let valuationDesc = "";
+
+            if (wPer > 22 || wPbr > 3.0) {
+                valuationDesc = "持股加權估值顯著偏高，屬於「高本益比成長型配置」。經理人重倉押注於高成長動能的尖端科技、AI晶片或具備產業寡占護城河的熱點股，極度追逐未來預期爆發力。";
+            } else if (wPer >= 13 && wPer <= 22) {
+                valuationDesc = "組合加權本益比定位合理，屬於「均衡混合型配置」。防守型大市值權值股與中堅成長股配置得當，攻守兼備。";
+            } else if (wPer > 0) {
+                valuationDesc = "整體本益比偏低，具備典型的「低估防禦價值型特徵」。投資組合多佈局在金融、高殖利率成熟期傳產或嚴重低估標的，波動率低且利息防禦能力強。";
+            } else {
+                valuationDesc = "部分成分股缺乏 FinMind 最新估值資訊。";
+            }
+
+            // 5. 核心持股與衛星持股判定 (利用歷史出現天數比例)
             let totalObservedDays = sortedDates.length;
             let occurrenceMap = {};
 
@@ -1381,27 +1449,90 @@ def main():
                 });
             });
 
-            let latestRows = newRows.filter(r => isNormalStock(r.stock, r.name));
             let coreHtml = "";
             let satelliteHtml = "";
-
             let allHistoricalStocks = Object.keys(occurrenceMap);
+
             allHistoricalStocks.forEach(sCode => {
                 let appearanceRate = occurrenceMap[sCode] / totalObservedDays;
-                let lRow = latestRows.find(x => x.stock === sCode);
+                let lRow = latestStocks.find(x => x.stock === sCode);
                 let currentWeight = lRow ? Number(lRow.weight) : 0;
                 let sName = lRow ? lRow.name : (etfData.find(x => x.stock === sCode)?.name || "歷史成分股");
 
-                if (currentWeight >= 5 && appearanceRate >= 0.8) {
-                    coreHtml += `<span class="badge bg-danger text-white m-1 p-2" title="歷史持倉率: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
+                // 核心長抱股 (最新權重 >= 4% 且 歷史出現率 >= 80%)
+                if (currentWeight >= 4 && appearanceRate >= 0.8) {
+                    coreHtml += `<span class="badge bg-danger text-white m-1 p-2" title="歷史持倉天數佔比: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
                 }
-                else if (currentWeight < 2 && appearanceRate < 0.3 && currentWeight > 0) {
-                    satelliteHtml += `<span class="badge bg-info text-dark m-1 p-2" title="歷史持倉率: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
+                // 衛星波段持股 (最新權重 < 2% 且 歷史出現率 < 40%)
+                else if (currentWeight < 2 && appearanceRate < 0.4 && currentWeight > 0) {
+                    satelliteHtml += `<span class="badge bg-info text-dark m-1 p-2" title="歷史持倉天數佔比: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
                 }
             });
 
-            document.getElementById('boxCoreList').innerHTML = coreHtml || '<span class="text-muted small p-2">無符合核心高權重長持股</span>';
-            document.getElementById('boxSatelliteList').innerHTML = satelliteHtml || '<span class="text-muted small p-2">無符合低權重短線衛星股</span>';
+            document.getElementById('boxCoreList').innerHTML = coreHtml || '<span class="text-muted small p-2">無符合核心高權重長持股條件標的</span>';
+            document.getElementById('boxSatelliteList').innerHTML = satelliteHtml || '<span class="text-muted small p-2">無符合低權重短線衛星股條件標的</span>';
+
+            // 6. 顯著調倉異動分析 (建倉、出清、重大增減)
+            let brandNewList = [];
+            let liquidatedList = [];
+            let majorBuyList = [];
+            let majorSellList = [];
+
+            allStockTokens.forEach(s => {
+                let oRow = oldRows.find(x => x.stock === s);
+                let nRow = newRows.find(x => x.stock === s);
+                let oW = oRow ? Number(oRow.weight) : 0;
+                let nW = nRow ? Number(nRow.weight) : 0;
+                let sName = nRow ? nRow.name : (oRow ? oRow.name : "未知");
+
+                if (!isNormalStock(s, sName)) return;
+
+                if (oW === 0 && nW > 0) {
+                    brandNewList.push(`<b class="text-dark">${s} ${sName}</b> (${nW.toFixed(1)}%)`);
+                } else if (oW > 0 && nW === 0) {
+                    liquidatedList.push(`<del class="text-muted">${s} ${sName}</del>`);
+                } else {
+                    let diffW = nW - oW;
+                    if (diffW >= 1.0) {
+                        majorBuyList.push(`<b class="text-danger">${s} ${sName}</b> (+${diffW.toFixed(1)}%)`);
+                    } else if (diffW <= -1.0) {
+                        majorSellList.push(`<b class="text-success">${s} ${sName}</b> (${diffW.toFixed(1)}%)`);
+                    }
+                }
+            });
+
+            // 組織統整卡片 HTML
+            let diagReportHtml = `
+                <div class="row g-3">
+                    <div class="col-md-6 border-end">
+                        <div class="mb-3">
+                            <span class="text-dark fw-bold fs-6"><i class="bi bi-compass-fill text-success me-1"></i>操作風格定位：</span>
+                            <span class="text-secondary small d-block mt-1">${styleDescription}</span>
+                        </div>
+                        <div class="mb-3">
+                            <span class="text-dark fw-bold fs-6"><i class="bi bi-pie-chart-fill text-warning me-1"></i>持股集中度剖析：</span>
+                            <span class="text-secondary small d-block mt-1">${concentrationText}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-dark fw-bold fs-6"><i class="bi bi-graph-up-arrow text-info me-1"></i>加權估值定位：</span>
+                            <span class="text-secondary small d-block mt-1">最新台股持股加權平均本益比為 <b>${wPerText}</b>，加權平均股淨比為 <b>${wPbrText}</b>。${valuationDesc}</span>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded bg-white" style="background-color:#fafbfc !important;">
+                            <span class="text-dark fw-bold fs-6"><i class="bi bi-lightning-fill text-danger me-1"></i>本期重大調倉異動報告：</span>
+                            <ul class="list-unstyled ps-1 mt-2 small text-secondary">
+                                <li class="mb-2">🚀 <b>全新建倉部位：</b> ${brandNewList.length > 0 ? brandNewList.join(', ') : '<span class="text-muted">本期無新增建倉</span>'}</li>
+                                <li class="mb-2">🗑️ <b>完全出清部位：</b> ${liquidatedList.length > 0 ? liquidatedList.join(', ') : '<span class="text-muted">本期無完全出清</span>'}</li>
+                                <li class="mb-2">📈 <b>顯著加碼 (權重提升≥1.0%)：</b> ${majorBuyList.length > 0 ? majorBuyList.join(', ') : '<span class="text-muted">本期無顯著超額加碼</span>'}</li>
+                                <li class="mb-2">📉 <b>顯著減碼 (權重降低≤-1.0%)：</b> ${majorSellList.length > 0 ? majorSellList.join(', ') : '<span class="text-muted">本期無顯著調節減持</span>'}</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('diagResultTextContainer').innerHTML = diagReportHtml;
             document.getElementById('diagnosticCard').style.display = "block";
         }
 
@@ -1470,7 +1601,6 @@ def main():
                     totalTwWeightPbr += w;
                 }
 
-                // 渲染至持股成分股明細表（依照：股票代號 股票名稱 持股權重 持股股數 本益比 順序呈現）
                 let displayPer = (perVal > 0) ? perVal.toFixed(2) : "-";
                 sHtml += `<tr>
                     <td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td>
@@ -1481,148 +1611,41 @@ def main():
                 </tr>`;
             });
 
-            // 計算加權平均估值並動態塞回卡片中
+            // 計算並呈加權估值
             let weightedPer = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
             let weightedPbr = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
             document.getElementById('metaWeightedPer').innerText = weightedPer;
             document.getElementById('metaWeightedPbr').innerText = weightedPbr;
 
             assets.forEach(r => {
-                aHtml += `<tr><td><span class="badge bg-light text-muted font-monospace border">${r.stock || '-'}</span></td><td class="text-muted">${r.name}</td><td class="text-end font-monospace">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace">${Math.round(r.volume).toLocaleString()}</td></tr>`;
+                aHtml += `<tr>
+                    <td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td>
+                    <td class="fw-bold">${r.name}</td>
+                    <td class="text-end font-monospace text-primary fw-bold">${Number(r.weight).toFixed(2)}%</td>
+                    <td class="text-end font-monospace text-secondary">${Math.round(r.volume).toLocaleString()}</td>
+                </tr>`;
             });
 
-            sBody.innerHTML = sHtml || '<tr><td colspan="5" class="text-center text-muted">無成分股資料</td></tr>';
-            aBody.innerHTML = aHtml || '<tr><td colspan="4" class="text-center text-muted">無非股票資產</td></tr>';
+            sBody.innerHTML = sHtml;
+            aBody.innerHTML = aHtml;
 
-            // 預設將時間拉回 20 日區間
-            if (sortedDates.length >= 2) {
-                let defaultOldIdx = Math.max(0, sortedDates.length - 21);
-                document.getElementById('startDateInput').value = sortedDates[defaultOldIdx];
-                document.getElementById('endDateInput').value = sortedDates[sortedDates.length - 1];
-            }
-            calculateChipsDelta(etfName, sortedDates);
-        }
-
-        function calculateChipsDelta(etfName, sortedDates) {
-            let type = document.getElementById('rangeType').value;
-            let dOld = null, dNew = null;
-            let etfData = globalRawData.filter(d => d.etf === etfName);
-
-            if (type === 'custom') {
+            // 觸發籌碼變更計算與風格診斷
+            let rangeType = document.getElementById('rangeType').value;
+            let dOld = null;
+            if (rangeType === 'custom') {
                 dOld = document.getElementById('startDateInput').value;
-                dNew = document.getElementById('endDateInput').value;
             } else {
-                let offset = parseInt(type);
+                let offset = parseInt(rangeType);
                 if (sortedDates.length > offset) {
                     dOld = sortedDates[sortedDates.length - 1 - offset];
-                    dNew = sortedDates[sortedDates.length - 1];
-                } else if (sortedDates.length >= 2) {
+                } else {
                     dOld = sortedDates[0];
-                    dNew = sortedDates[sortedDates.length - 1];
                 }
             }
-
-            if(!dOld || !dNew) return;
-
+            let dNew = latestDate;
+            
+            calculateStockChanges(etfName, dOld, dNew);
             runManagerStyleDiagnosis(etfName, dOld, dNew, sortedDates);
-
-            let rowsOld = etfData.filter(d => d.date === dOld);
-            let rowsNew = etfData.filter(d => d.date === dNew);
-            let idxNew = sortedDates.indexOf(dNew);
-
-            let trendMap = {};
-            if (sortedDates.length >= 2) {
-                let uniqStocks = [...new Set(etfData.map(d => d.stock))].filter(sCode => {
-                    let match = etfData.find(d => d.stock === sCode);
-                    return match ? isNormalStock(match.stock, match.name) : false;
-                });
-
-                uniqStocks.forEach(sCode => {
-                    let streakCount = 0;
-                    let currentTrend = null;
-                    
-                    for (let i = idxNew; i > 0; i--) {
-                        let dateN = sortedDates[i];
-                        let dateO = sortedDates[i - 1];
-                        let vNew = etfData.find(d => d.date === dateN && d.stock === sCode)?.volume || 0;
-                        let vOld = etfData.find(d => d.date === dateO && d.stock === sCode)?.volume || 0;
-                        let diff = vNew - vOld;
-                        
-                        if (diff === 0) break; 
-                        
-                        let dayTrend = diff > 0 ? "買" : "賣";
-                        if (currentTrend === null) {
-                            currentTrend = dayTrend;
-                            streakCount = 1;
-                        } else if (dayTrend === currentTrend) {
-                            streakCount++;
-                        } else {
-                            break; 
-                        }
-                    }
-                    
-                    if (streakCount >= 1 && currentTrend) { 
-                        trendMap[sCode] = '連' + currentTrend + streakCount + '日'; 
-                    }
-                });
-            }
-
-            let allStocks = [...new Set([...rowsOld.map(r=>r.stock), ...rowsNew.map(r=>r.stock)])].filter(s => {
-                let match = rowsNew.find(x=>x.stock===s) || rowsOld.find(x=>x.stock===s);
-                return match ? isNormalStock(match.stock, match.name) : false;
-            });
-
-            let changes = allStocks.map(sCode => {
-                let oRow = rowsOld.find(x => x.stock === sCode);
-                let nRow = rowsNew.find(x => x.stock === sCode);
-                let oVol = oRow ? Number(oRow.volume) : 0;
-                let nVol = nRow ? Number(nRow.volume) : 0;
-                
-                let oW = oRow ? Number(oRow.weight) : 0;
-                let nW = nRow ? Number(nRow.weight) : 0;
-                
-                let diff = nVol - oVol;
-                let wDiff = nW - oW;
-                let name = nRow ? nRow.name : (oRow ? oRow.name : "");
-                let nature = "";
-                
-                if (oVol === 0 && nVol > 0) nature = "NEW";
-                else if (oVol > 0 && nVol === 0) nature = "DELETE";
-                else if (diff > 0) {
-                    nature = (wDiff > 0.5) ? "STRONG_UP" : "UP";
-                }
-                else if (diff < 0) nature = "DOWN";
-                else nature = "NONE";
-                
-                return { stock: sCode, name: name, diff: diff, wDiff: wDiff, nature: nature };
-            }).filter(x => x.nature !== "NONE");
-
-            let htmlNew = "", htmlStrongAdd = "", htmlAdd = "", htmlSub = "", htmlDel = "";
-            changes.sort((a,b) => b.diff - a.diff).forEach(r => {
-                let badge = "";
-                let dStyle = "";
-                if(r.nature === "NEW") { badge = `<span class="badge-nature-new">🆕 新增納入</span>`; dStyle = "color:#ea580c;"; }
-                else if(r.nature === "STRONG_UP") { badge = `<span class="badge bg-danger text-white" style="padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">🔥 顯著加碼</span>`; dStyle = "color:#b91c1c; font-weight: bold;"; }
-                else if(r.nature === "UP") { badge = `<span class="badge-nature-up">🔺 經理人加碼</span>`; dStyle = "color:#dc2626;"; }
-                else if(r.nature === "DOWN") { badge = `<span class="badge-nature-down">🔻 經理人減持</span>`; dStyle = "color:#0f766e;"; }
-                else if(r.nature === "DELETE") { badge = `<span class="badge-nature-delete">❌ 完整剔除</span>`; dStyle = "color:#4b5563;"; }
-
-                let trendStr = trendMap[r.stock] || "區間無連續動向";
-                let trendHtml = `<span class="text-muted">首日首筆變動</span>`;
-                if(trendStr.includes("買")) trendHtml = `<span class="badge-trend-buy">📈 ${trendStr}</span>`;
-                if(trendStr.includes("賣")) trendHtml = `<span class="badge-trend-sell">📉 ${trendStr}</span>`;
-
-                let wDiffText = r.wDiff !== 0 ? ` (${r.wDiff > 0 ? '+' : ''}${r.wDiff.toFixed(2)}%)` : '';
-                let rowHtml = `<tr><td class="fw-bold">${r.stock} <span class="text-muted small fw-normal ms-2">${r.name}</span></td><td>${badge}</td><td class="text-end fw-bold font-monospace" style="${dStyle}">${Math.round(r.diff).toLocaleString()} 股${wDiffText}</td><td class="px-4">${trendHtml}</td></tr>`;
-                
-                if(r.nature === "NEW") htmlNew += rowHtml;
-                else if(r.nature === "STRONG_UP") htmlStrongAdd += rowHtml;
-                else if(r.nature === "UP") htmlAdd += rowHtml;
-                else if(r.nature === "DOWN") htmlSub += rowHtml;
-                else if(r.nature === "DELETE") htmlDel += rowHtml;
-            });
-
-            document.getElementById('changeTableBody').innerHTML = (htmlNew + htmlStrongAdd + htmlAdd + htmlSub + htmlDel) || '<tr><td colspan="4" class="text-center text-muted py-3">此區間成分股數量與持有股數未發生任何變動</td></tr>';
         }
 
         function toggleCustomDates() {
@@ -1631,226 +1654,408 @@ def main():
         }
 
         function refreshCurrentEtf() {
-            if(!selectedEtf) return;
-            let etfData = globalRawData.filter(d => d.etf === selectedEtf);
-            let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-            calculateChipsDelta(selectedEtf, dates);
+            if (selectedEtf) {
+                selectEtf(selectedEtf);
+            }
         }
 
-        function searchStockSuggestions(keyword, boxId, inputId, isMultiple) {
-            let box = document.getElementById(boxId);
-            if (!keyword || keyword.trim() === "") { box.style.display = 'none'; return; }
-            let k = keyword.trim().toLowerCase();
-            
-            let stockMap = {};
-            globalRawData.forEach(r => {
-                if (r.stock && isNormalStock(r.stock, r.name)) { stockMap[r.stock] = r.name; }
+        function calculateStockChanges(etfName, dOld, dNew) {
+            let etfData = globalRawData.filter(d => d.etf === etfName);
+            let oldRows = etfData.filter(d => d.date === dOld);
+            let newRows = etfData.filter(d => d.date === dNew);
+
+            let allStocks = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])].filter(s => {
+                let match = newRows.find(x=>x.stock===s) || oldRows.find(x=>x.stock===s);
+                return match ? isNormalStock(match.stock, match.name) : false;
             });
+
+            let changeHtml = "";
             
+            allStocks.forEach(sCode => {
+                let oRow = oldRows.find(x => x.stock === sCode);
+                let nRow = newRows.find(x => x.stock === sCode);
+                let oVol = oRow ? Number(oRow.volume) : 0;
+                let nVol = nRow ? Number(nRow.volume) : 0;
+                let oW = oRow ? Number(oRow.weight) : 0;
+                let nW = nRow ? Number(nRow.weight) : 0;
+                let sName = nRow ? nRow.name : (oRow ? oRow.name : "未知股票");
+
+                let diffVol = nVol - oVol;
+                let diffW = nW - oW;
+
+                let actionBadge = "";
+                let actionDesc = "";
+                let trendBadge = "";
+
+                if (oVol === 0 && nVol > 0) {
+                    actionBadge = `<span class="badge-nature-new"><i class="bi bi-plus-circle me-1"></i>全新納入</span>`;
+                    actionDesc = `新增 ${Math.round(nVol).toLocaleString()} 股 (佔權重 ${nW.toFixed(2)}%)`;
+                    trendBadge = `<span class="badge-trend-buy">首度進場佈局</span>`;
+                } else if (oVol > 0 && nVol === 0) {
+                    actionBadge = `<span class="badge-nature-delete"><i class="bi bi-dash-circle me-1"></i>全數剔除</span>`;
+                    actionDesc = `出清原持股 ${Math.round(oVol).toLocaleString()} 股 (原佔 ${oW.toFixed(2)}%)`;
+                    trendBadge = `<span class="badge-trend-sell">部位全數出清</span>`;
+                } else if (diffVol > 0) {
+                    actionBadge = `<span class="badge-nature-up"><i class="bi bi-caret-up-fill me-1"></i>加碼持股</span>`;
+                    actionDesc = `增加 ${Math.round(diffVol).toLocaleString()} 股 (權重變動: ${diffW > 0 ? '+' : ''}${diffW.toFixed(2)}%)`;
+                    trendBadge = diffW > 1.0 ? `<span class="badge-trend-buy">積極加碼中</span>` : `<span class="badge bg-light text-dark border">常規調整</span>`;
+                } else if (diffVol < 0) {
+                    actionBadge = `<span class="badge-nature-down"><i class="bi bi-caret-down-fill me-1"></i>減持股份</span>`;
+                    actionDesc = `調節 ${Math.round(Math.abs(diffVol)).toLocaleString()} 股 (權重變動: ${diffW.toFixed(2)}%)`;
+                    trendBadge = diffW < -1.0 ? `<span class="badge-trend-sell">防禦性減持</span>` : `<span class="badge bg-light text-dark border">常規調整</span>`;
+                } else {
+                    if (Math.abs(diffW) > 0.01) {
+                        actionBadge = `<span class="badge bg-light text-secondary border"><i class="bi bi-arrow-left-right me-1"></i>權重微調</span>`;
+                        actionDesc = `股數不變 (因股價漲跌，權重變動: ${diffW > 0 ? '+' : ''}${diffW.toFixed(2)}%)`;
+                        trendBadge = `<span class="badge bg-light text-muted border">被動價格波動</span>`;
+                    } else {
+                        return; 
+                    }
+                }
+
+                changeHtml += `<tr>
+                    <td class="fw-bold">${sCode} <span class="text-muted small fw-normal ms-1">${sName}</span></td>
+                    <td>${actionBadge}</td>
+                    <td class="text-end font-monospace">${actionDesc}</td>
+                    <td class="px-4">${trendBadge}</td>
+                </tr>`;
+            });
+
+            document.getElementById('changeTableBody').innerHTML = changeHtml || '<tr><td colspan="4" class="text-center text-muted">此日期區間內，成分股股數無顯著增減異動</td></tr>';
+        }
+
+        // ==========================================
+        // 🔍 個股與組合篩選搜尋模組
+        // ==========================================
+        function searchStockSuggestions(query, suggestionBoxId, inputId, isMatcher) {
+            let box = document.getElementById(suggestionBoxId);
+            if (!query || query.trim().length === 0) {
+                box.style.display = 'none';
+                return;
+            }
+            let q = query.trim().toUpperCase();
             let matches = [];
-            Object.keys(stockMap).forEach(code => {
-                let name = stockMap[code];
-                if (code.toLowerCase().includes(k) || name.toLowerCase().includes(k)) { matches.push({ code: code, name: name }); }
+            
+            Object.keys(tickerMappingData).forEach(code => {
+                let name = tickerMappingData[code];
+                if (code.toUpperCase().includes(q) || name.toUpperCase().includes(q)) {
+                    matches.push({ code: code, name: name });
+                }
             });
             
-            if (matches.length === 0) { box.style.display = 'none'; return; }
+            if (matches.length === 0) {
+                box.style.display = 'none';
+                return;
+            }
             
             let html = "";
             matches.slice(0, 8).forEach(item => {
-                if (isMultiple) { html += `<div class="suggestion-item" onclick="addTargetStockTag('${item.code}', '${item.name}', '${boxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`; }
-                else { html += `<div class="suggestion-item" onclick="selectStockSuggestion('${item.code}', '${item.name}', '${boxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`; }
+                if (isMatcher) {
+                    html += `<div class="suggestion-item" onclick="selectMatcherTarget('${item.code}', '${item.name}', '${suggestionBoxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`;
+                } else {
+                    html += `<div class="suggestion-item" onclick="selectStockForDist('${item.code}', '${item.name}', '${suggestionBoxId}', '${inputId}')"><b>${item.code}</b> - ${item.name}</div>`;
+                }
             });
             box.innerHTML = html;
             box.style.display = 'block';
         }
 
-        function selectStockSuggestion(code, name, boxId, inputId) {
-            document.getElementById('stockSearchInput').value = code;
+        function selectStockForDist(code, name, boxId, inputId) {
+            document.getElementById(inputId).value = `${code} ${name}`;
             document.getElementById(boxId).style.display = 'none';
-        }
-
-        function addTargetStockTag(code, name, boxId, inputId) {
-            document.getElementById(inputId).value = "";
-            document.getElementById(boxId).style.display = 'none';
-            if (selectedTargetStocks.some(x => x.code === code)) return;
-            selectedTargetStocks.push({ code: code, name: name });
-            renderTargetTags();
-            calculateMatchedEtfs();
-        }
-
-        function removeTargetStockTag(code) {
-            selectedTargetStocks = selectedTargetStocks.filter(x => x.code !== code);
-            renderTargetTags();
-            calculateMatchedEtfs();
-        }
-
-        function renderTargetTags() {
-            let container = document.getElementById('selectedTargetContainer');
-            if (selectedTargetStocks.length === 0) { container.innerHTML = '<span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選組合</span>'; return; }
-            container.innerHTML = selectedTargetStocks.map(x => `<span class="selected-stock-tag"><b>${x.code}</b> ${x.name} <i class="bi bi-x-circle-fill" onclick="removeTargetStockTag('${x.code}')"></i></span>`).join('');
-        }
-
-        function calculateMatchedEtfs() {
-            let body = document.getElementById('matchResultBody');
-            if(selectedTargetStocks.length === 0) { body.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>'; return; }
-
-            let etfSet = new Set();
-            globalRawData.forEach(r => { if(r.etf) etfSet.add(r.etf); });
-            
-            let res = [];
-            etfSet.forEach(eCode => {
-                let etfData = globalRawData.filter(d => d.etf === eCode);
-                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-                let latestDate = dates[dates.length - 1];
-                let latestRows = etfData.filter(d => d.date === latestDate);
-
-                let matchCount = 0;
-                let totalWeight = 0;
-                let details = [];
-
-                selectedTargetStocks.forEach(t => {
-                    let match = latestRows.find(x => x.stock === t.code);
-                    if (match) {
-                        matchCount++;
-                        let w = Number(match.weight);
-                        totalWeight += w;
-                        details.push(`<span class="badge bg-light text-primary border me-1">${t.name}: ${w.toFixed(2)}%</span>`);
-                    } else {
-                        details.push(`<span class="badge bg-light text-muted border me-1">${t.name}: ❌ 未持有</span>`);
-                    }
-                });
-
-                if (matchCount === selectedTargetStocks.length) {
-                    res.push({ etf: eCode, name: etfNameMappingData[eCode] || "未知名稱", totalWeight: totalWeight, details: details.join('') });
-                }
-            });
-
-            res.sort((a,b) => b.totalWeight - a.totalWeight);
-            body.innerHTML = res.map(x => `<tr><td class="font-monospace fw-bold">${x.etf}</td><td class="fw-bold text-secondary">${x.name}</td><td class="text-end font-monospace text-success fw-bold fs-5">${x.totalWeight.toFixed(2)}%</td><td class="px-4">${x.details}</td></tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-4"><i class="bi bi-exclamation-triangle me-1"></i>全市場查無同時重疊包含這些目標公司的 ETF。請精簡您的目標清單再試一次。</td></tr>';
+            window.selectedDistStock = code;
+            window.selectedDistStockName = name;
         }
 
         function searchStockDistribution() {
-            let code = document.getElementById('stockSearchInput').value.trim();
-            if(!code) { alert("請輸入個股代號或名稱"); return; }
+            let code = window.selectedDistStock;
+            if (!code) {
+                alert("請先從下拉選單選取股票標的！");
+                return;
+            }
             
-            let searchUpper = code.toUpperCase();
-            let matchRow = globalRawData.find(x => {
-                let sTarget = x.stock ? x.stock.trim().toUpperCase() : "";
-                let nTarget = x.name ? x.name.trim().toUpperCase() : "";
-                return sTarget === searchUpper || nTarget === searchUpper || sTarget === (searchUpper + " US");
-            });
+            let stockData = globalRawData.filter(d => d.stock === code);
+            if (stockData.length === 0) {
+                stockData = globalRawData.filter(d => d.stock.toUpperCase().includes(code.toUpperCase()));
+            }
             
-            if (!matchRow) { alert("查無此股票資料，請輸入完整正確代號"); return; }
-            let sCode = matchRow.stock;
-            let sName = matchRow.name;
+            if (stockData.length === 0) {
+                alert("目前歷史大數據庫中，無任何 ETF 持有此股票標的。");
+                return;
+            }
 
-            document.getElementById('resStockTitle').innerText = `${sCode} - ${sName}`;
-            document.getElementById('stockResultContainer').style.display = 'block';
+            let sName = window.selectedDistStockName || (stockData[0] ? stockData[0].name : "未知股票");
+            document.getElementById('resStockTitle').innerText = `${code} ${sName}`;
 
             let etfSet = new Set(globalRawData.map(d => d.etf));
-            let distRows = [];
-            let weightRows = [];
-            let totalDiff = 0;
+            let latestEtfHoldings = [];
+            let netVolChange = 0;
 
-            etfSet.forEach(eCode => {
-                let etfData = globalRawData.filter(d => d.etf === eCode);
+            etfSet.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
                 let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-                if(dates.length >= 2) {
-                    let dOld = dates[dates.length - 2];
-                    let dNew = dates[dates.length - 1];
-                    let oVol = etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
-                    let nVol = etfData.find(d => d.date === dNew && d.stock === sCode)?.volume || 0;
-                    let diff = nVol - oVol;
-                    if(diff !== 0) {
-                        totalDiff += diff;
-                        distRows.push({ etf: eCode, name: etfNameMappingData[eCode] || "未知名稱", diff: diff });
-                    }
+                if (dates.length === 0) return;
+                
+                let latestD = dates[dates.length - 1];
+                let latestRow = etfData.find(d => d.date === latestD && d.stock === code);
+                
+                if (latestRow) {
+                    latestEtfHoldings.push({
+                        etf: e,
+                        etfName: etfNameMappingData[e] || "未知基金",
+                        weight: Number(latestRow.weight),
+                        volume: Number(latestRow.volume)
+                    });
                 }
-                let latestDate = dates[dates.length - 1];
-                let lRow = etfData.find(d => d.date === latestDate && d.stock === sCode);
-                if (lRow) { weightRows.push({ eCode: eCode, name: etfNameMappingData[eCode] || "未知名稱", weight: Number(lRow.weight) }); }
+
+                if (dates.length >= 2) {
+                    let dNew = dates[dates.length - 1];
+                    let dOld = dates.length > 20 ? dates[dates.length - 21] : dates[0];
+                    let rNew = etfData.find(d => d.date === dNew && d.stock === code);
+                    let rOld = etfData.find(d => d.date === dOld && d.stock === code);
+                    let vNew = rNew ? Number(rNew.volume) : 0;
+                    let vOld = rOld ? Number(rOld.volume) : 0;
+                    netVolChange += (vNew - vOld);
+                }
             });
 
-            let trendStatusEl = document.getElementById('trendStockStatus');
-            trendStatusEl.innerHTML = totalDiff > 0 ? `<span class="badge bg-danger">🔥 淨加碼</span>` : (totalDiff < 0 ? `<span class="badge bg-success">📉 淨減持</span>` : `<span class="badge bg-secondary">持平</span>`);
-            let totalVolEl = document.getElementById('trendStockTotalVol');
-            totalVolEl.innerText = `${totalDiff > 0 ? '+' : ''}${Math.round(totalDiff).toLocaleString()} 股`;
-            totalVolEl.className = `fw-bold font-monospace mb-0 ${totalDiff > 0 ? 'text-danger' : 'text-success'}`;
+            latestEtfHoldings.sort((a,b) => b.weight - a.weight);
+            let distHtml2 = "";
+            latestEtfHoldings.forEach(item => {
+                distHtml2 += `<tr>
+                    <td class="font-monospace fw-bold">${item.etf}</td>
+                    <td class="fw-bold text-secondary">${item.etfName}</td>
+                    <td class="text-end font-monospace text-primary fw-bold">${item.weight.toFixed(2)}%</td>
+                </tr>`;
+            });
+            document.getElementById('stockDistBody2').innerHTML = distHtml2 || '<tr><td colspan="3" class="text-center text-muted">目前尚無任何 ETF 在最新期持股中包含此標的</td></tr>';
 
-            let changeHtml = distRows.sort((a,b)=>b.diff - a.diff).map(x => `<tr><td><b>${x.etf}</b> <span class="text-muted small">${x.name}</span></td><td class="text-end font-monospace fw-bold ${x.diff > 0 ? 'text-danger' : 'text-success'}">${x.diff > 0 ? '+' : ''}${Math.round(x.diff).toLocaleString()} 股</td></tr>`).join('');
-            let weightHtml = weightRows.sort((a,b)=>b.weight - a.weight).map(x => `<tr><td class="font-monospace fw-bold">${x.eCode}</td><td class="fw-bold text-secondary">${x.name}</td><td class="text-end font-monospace text-primary fw-bold">${x.weight.toFixed(2)}%</td></tr>`).join('');
+            let distHtml1 = "";
+            etfSet.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
+                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+                if (dates.length < 2) return;
+                
+                let dNew = dates[dates.length - 1];
+                let dOld = dates.length > 20 ? dates[dates.length - 21] : dates[0];
+                let rNew = etfData.find(d => d.date === dNew && d.stock === code);
+                let rOld = etfData.find(d => d.date === dOld && d.stock === code);
+                let vNew = rNew ? Number(rNew.volume) : 0;
+                let vOld = rOld ? Number(rOld.volume) : 0;
+                let diffV = vNew - vOld;
 
-            document.getElementById('stockDistBody').innerHTML = changeHtml || `<tr><td colspan="2" class="text-center text-muted py-3">近一日無經理人在此標的進行調整變動</td></tr>`;
-            document.getElementById('stockDistBody2').innerHTML = weightHtml || `<tr><td colspan="3" class="text-center text-muted py-3">全市場無 ETF 持有此股票標的</td></tr>`;
+                if (vNew > 0 || vOld > 0) {
+                    let changeColor = diffV > 0 ? "text-danger" : (diffV < 0 ? "text-success" : "text-muted");
+                    let changeSign = diffV > 0 ? "+" : "";
+                    distHtml1 += `<tr>
+                        <td class="fw-bold">${e} <span class="text-muted small">${etfNameMappingData[e] || ""}</span></td>
+                        <td class="font-monospace fw-bold ${changeColor}">${changeSign}${Math.round(diffV).toLocaleString()} 股</td>
+                    </tr>`;
+                }
+            });
+            document.getElementById('stockDistBody').innerHTML = distHtml1 || '<tr><td colspan="2" class="text-center text-muted">歷史區間內股數無任何變動</td></tr>';
+
+            document.getElementById('trendStockTotalVol').innerText = (netVolChange >= 0 ? "+" : "") + Math.round(netVolChange).toLocaleString() + " 股";
+            document.getElementById('trendStockTotalVol').className = `fw-bold fs-5 mt-1 ${netVolChange >= 0 ? 'text-danger' : 'text-success'}`;
+            
+            let statusText = "持股穩定";
+            if (netVolChange > 500000) statusText = "市場熱門加碼股";
+            else if (netVolChange > 50000) statusText = "微幅加碼中";
+            else if (netVolChange < -500000) statusText = "經理人防禦調節股";
+            else if (netVolChange < -5000) statusText = "微幅減持中";
+            document.getElementById('trendStockStatus').innerText = statusText;
+
+            document.getElementById('stockResultContainer').style.display = 'block';
         }
 
+        // ==========================================
+        // 💡 AI 投資組合重疊對照
+        // ==========================================
+        function selectMatcherTarget(code, name, boxId, inputId) {
+            document.getElementById(inputId).value = "";
+            document.getElementById(boxId).style.display = 'none';
+
+            if (selectedTargetStocks.some(item => item.code === code)) {
+                return; 
+            }
+            
+            selectedTargetStocks.push({ code: code, name: name });
+            renderSelectedTargets();
+            calculateMatcherOverlap();
+        }
+
+        function removeMatcherTarget(code) {
+            selectedTargetStocks = selectedTargetStocks.filter(item => item.code !== code);
+            renderSelectedTargets();
+            calculateMatcherOverlap();
+        }
+
+        function renderSelectedTargets() {
+            let container = document.getElementById('selectedTargetContainer');
+            if (selectedTargetStocks.length === 0) {
+                container.innerHTML = `<span class="text-muted small py-1" id="noTargetText">尚未選取 any 公司，請從上方搜尋框輸入並挑選組合</span>`;
+                return;
+            }
+            
+            let html = "";
+            selectedTargetStocks.forEach(item => {
+                html += `<span class="selected-stock-tag">
+                    <b>${item.code}</b> ${item.name}
+                    <i class="bi bi-x-circle-fill" onclick="removeMatcherTarget('${item.code}')"></i>
+                </span>`;
+            });
+            container.innerHTML = html;
+        }
+
+        function calculateMatcherOverlap() {
+            if (selectedTargetStocks.length === 0) {
+                document.getElementById('matchResultBody').innerHTML = `<tr><td colspan="4" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>`;
+                return;
+            }
+
+            let etfSet = new Set(globalRawData.map(d => d.etf));
+            let results = [];
+
+            etfSet.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
+                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+                if (dates.length === 0) return;
+                let latestD = dates[dates.length - 1];
+                let latestRows = etfData.filter(d => d.date === latestD);
+
+                let matchedList = [];
+                let totalWeight = 0;
+
+                selectedTargetStocks.forEach(target => {
+                    let match = latestRows.find(r => r.stock === target.code);
+                    if (match) {
+                        let w = Number(match.weight);
+                        matchedList.push({ code: target.code, name: target.name, weight: w });
+                        totalWeight += w;
+                    }
+                });
+
+                if (matchedList.length > 0) {
+                    results.push({
+                        etf: e,
+                        etfName: etfNameMappingData[e] || "未知基金",
+                        totalWeight: totalWeight,
+                        matchedCount: matchedList.length,
+                        details: matchedList
+                    });
+                }
+            });
+
+            results.sort((a,b) => b.matchedCount - a.matchedCount || b.totalWeight - a.totalWeight);
+
+            let html = "";
+            if (results.length === 0) {
+                html = `<tr><td colspan="4" class="text-center py-4 text-muted">目前市場上尚無 ETF 同時持有這些目標公司。</td></tr>`;
+            } else {
+                results.forEach(item => {
+                    let chips = item.details.map(d => `<span class="badge bg-light text-primary border me-1"><b>${d.code}</b> ${d.name} (${d.weight.toFixed(1)}%)</span>`).join('');
+                    html += `<tr>
+                        <td class="font-monospace fw-bold"><span class="badge bg-primary">${item.etf}</span></td>
+                        <td class="fw-bold text-secondary">${item.etfName}</td>
+                        <td class="text-end font-monospace text-danger fw-bold fs-5">${item.totalWeight.toFixed(2)}%</td>
+                        <td class="px-4">
+                            <div class="mb-1 text-secondary small">重疊匹配數: <b>${item.matchedCount} / ${selectedTargetStocks.length}</b> 檔</div>
+                            <div>${chips}</div>
+                        </td>
+                    </tr>`;
+                });
+            }
+            document.getElementById('matchResultBody').innerHTML = html;
+        }
+
+        // ==========================================
+        // 🌐 全市場異動總覽與熱度模組
+        // ==========================================
         function toggleGlobalChanges() {
             let type = document.getElementById('globalRangeType').value;
             document.getElementById('globalCustomDateGroup').style.display = (type === 'custom') ? 'block' : 'none';
         }
 
         function loadGlobalChanges() {
-            document.getElementById('loading').style.display = 'flex';
-            setTimeout(() => {
-                let type = document.getElementById('globalRangeType').value;
-                let etfSet = new Set(globalRawData.map(d => d.etf));
-                let addedMap = {}, deletedMap = {};
+            let type = document.getElementById('globalRangeType').value;
+            let etfSet = new Set(globalRawData.map(d => d.etf));
+            
+            let additions = {}; 
+            let liquidations = {}; 
 
-                etfSet.forEach(eCode => {
-                    let etfData = globalRawData.filter(d => d.etf === eCode);
-                    let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-                    let dOld = null, dNew = null;
-                    
-                    if (type === 'custom') {
-                        dOld = document.getElementById('globalStartDate').value;
-                        dNew = document.getElementById('globalEndDate').value;
+            etfSet.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
+                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+                if (dates.length < 2) return;
+
+                let dOld = null, dNew = dates[dates.length - 1];
+                if (type === 'custom') {
+                    dOld = document.getElementById('globalStartDate').value;
+                    dNew = document.getElementById('globalEndDate').value;
+                } else {
+                    let offset = parseInt(type);
+                    if (dates.length > offset) {
+                        dOld = dates[dates.length - 1 - offset];
                     } else {
-                        let offset = parseInt(type);
-                        if(dates.length > offset) { dOld = dates[dates.length - 1 - offset]; dNew = dates[dates.length - 1]; }
+                        dOld = dates[0];
                     }
+                }
 
-                    if(dOld && dNew) {
-                        let oldStocks = etfData.filter(d => d.date === dOld && isNormalStock(d.stock, d.name)).map(d => d.stock);
-                        let newStocks = etfData.filter(d => d.date === dNew && isNormalStock(d.stock, d.name)).map(d => d.stock);
-                        
-                        newStocks.forEach(s => {
-                            if (!oldStocks.includes(s)) {
-                                let r = etfData.find(d => d.date === dNew && d.stock === s);
-                                let sName = r ? r.name : "";
-                                let k = s + "||" + sName;
-                                if(!addedMap[k]) addedMap[k] = [];
-                                addedMap[k].push(eCode);
-                            }
-                        });
+                if (!dOld || !dNew) return;
 
-                        oldStocks.forEach(s => {
-                            if (!newStocks.includes(s)) {
-                                let r = etfData.find(d => d.date === dOld && d.stock === s);
-                                let sName = r ? r.name : "";
-                                let k = s + "||" + sName;
-                                if(!deletedMap[k]) deletedMap[k] = [];
-                                deletedMap[k].push(eCode);
-                            }
-                        });
+                let oldRows = etfData.filter(d => d.date === dOld);
+                let newRows = etfData.filter(d => d.date === dNew);
+
+                oldRows.forEach(r => {
+                    if (!isNormalStock(r.stock, r.name)) return;
+                    let match = newRows.find(x => x.stock === r.stock);
+                    if (!match) {
+                        let token = r.stock + "||" + r.name;
+                        if (!liquidations[token]) liquidations[token] = [];
+                        liquidations[token].push(e);
                     }
                 });
 
-                let nHtml = Object.keys(addedMap).map(k => {
-                    let [s, name] = k.split("||");
-                    let list = addedMap[k].map(e => `<span class="badge bg-light text-danger border me-1"><b>${e}</b></span>`).join('');
-                    return `<tr><td class="fw-bold">${s} <span class="text-muted small fw-normal ms-1">${name}</span></td><td>${list}</td></tr>`;
-                }).join('');
+                newRows.forEach(r => {
+                    if (!isNormalStock(r.stock, r.name)) return;
+                    let match = oldRows.find(x => x.stock === r.stock);
+                    if (!match) {
+                        let token = r.stock + "||" + r.name;
+                        if (!additions[token]) additions[token] = [];
+                        additions[token].push(e);
+                    }
+                });
+            });
 
-                let dHtml = Object.keys(deletedMap).map(k => {
-                    let [s, name] = k.split("||");
-                    let list = deletedMap[k].map(e => `<span class="badge bg-light text-secondary border me-1"><b>${e}</b></span>`).join('');
-                    return `<tr><td class="fw-bold">${s} <span class="text-muted small fw-normal ms-1">${name}</span></td><td>${list}</td></tr>`;
-                }).join('');
+            let addArr = Object.keys(additions).map(k => {
+                let [code, name] = k.split("||");
+                return { code: code, name: name, etfs: additions[k] };
+            }).sort((a,b) => b.etfs.length - a.etfs.length);
 
-                document.getElementById('globalNewBody').innerHTML = nHtml || '<tr><td colspan="2" class="text-center text-muted py-3">無新增成分股項目</td></tr>';
-                document.getElementById('globalDelBody').innerHTML = dHtml || '<tr><td colspan="2" class="text-center text-muted py-3">無剔除成分股項目</td></tr>';
-                document.getElementById('loading').style.display = 'none';
-            }, 50);
+            let delArr = Object.keys(liquidations).map(k => {
+                let [code, name] = k.split("||");
+                return { code: code, name: name, etfs: liquidations[k] };
+            }).sort((a,b) => b.etfs.length - a.etfs.length);
+
+            let addHtml = "";
+            addArr.forEach(item => {
+                let chips = item.etfs.map(e => `<span class="badge bg-light text-danger border me-1"><b>${e}</b></span>`).join('');
+                addHtml += `<tr>
+                    <td class="fw-bold">${item.code} <span class="text-muted small fw-normal ms-1">${item.name}</span></td>
+                    <td>${chips} <span class="badge bg-danger-subtle text-danger ms-2">${item.etfs.length} 家</span></td>
+                </tr>`;
+            });
+            document.getElementById('globalNewBody').innerHTML = addHtml || '<tr><td colspan="2" class="text-center text-muted">本區間無新增成分股</td></tr>';
+
+            let delHtml = "";
+            delArr.forEach(item => {
+                let chips = item.etfs.map(e => `<span class="badge bg-light text-secondary border me-1"><b>${e}</b></span>`).join('');
+                delHtml += `<tr>
+                    <td class="fw-bold text-secondary">${item.code} <span class="text-muted small fw-normal ms-1">${item.name}</span></td>
+                    <td>${chips} <span class="badge bg-secondary-subtle text-dark ms-2">${item.etfs.length} 家</span></td>
+                </tr>`;
+            });
+            document.getElementById('globalDelBody').innerHTML = delHtml || '<tr><td colspan="2" class="text-center text-muted">本區間無剔除成分股</td></tr>';
         }
 
         function toggleHeatCustomDates() {
@@ -1859,211 +2064,212 @@ def main():
         }
 
         function loadMarketHeat() {
-            document.getElementById('loading').style.display = 'flex';
-            setTimeout(() => {
-                let type = document.getElementById('heatRangeType').value;
-                let stockMap = {};
-                
-                globalRawData.forEach(r => {
-                    if(r.stock && isNormalStock(r.stock, r.name)) { stockMap[r.stock] = { code: r.stock, name: r.name }; }
+            let type = document.getElementById('heatRangeType').value;
+            let etfSet = new Set(globalRawData.map(d => d.etf));
+            let stockAdjustments = {}; 
+
+            etfSet.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
+                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+                if (dates.length < 2) return;
+
+                let dOld = null, dNew = dates[dates.length - 1];
+                if (type === 'custom') {
+                    dOld = document.getElementById('heatStartDate').value;
+                    dNew = document.getElementById('heatEndDate').value;
+                } else {
+                    let offset = parseInt(type);
+                    if (dates.length > offset) {
+                        dOld = dates[dates.length - 1 - offset];
+                    } else {
+                        dOld = dates[0];
+                    }
+                }
+
+                if (!dOld || !dNew) return;
+
+                let oldRows = etfData.filter(d => d.date === dOld);
+                let newRows = etfData.filter(d => d.date === dNew);
+
+                let allStocks = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])].filter(s => {
+                    let match = newRows.find(x=>x.stock===s) || oldRows.find(x=>x.stock===s);
+                    return match ? isNormalStock(match.stock, match.name) : false;
                 });
 
-                let etfSet = new Set(globalRawData.map(d => d.etf));
-                let list = Object.keys(stockMap).map(sCode => {
-                    let oVol = 0, nVol = 0;
-                    etfSet.forEach(eCode => {
-                        let etfData = globalRawData.filter(d => d.etf === eCode);
-                        let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-                        let dOld = null, dNew = null;
-                        if(type === 'custom') { dOld = document.getElementById('heatStartDate').value; dNew = document.getElementById('heatEndDate').value; }
-                        else { let offset = parseInt(type); if(dates.length > offset) { dOld = dates[dates.length - 1 - offset]; dNew = dates[dates.length - 1]; } }
-                        if(dOld && dNew) {
-                            oVol += etfData.find(d => d.date === dOld && d.stock === sCode)?.volume || 0;
-                            nVol += etfData.find(d => d.date === dNew && d.stock === sCode)?.volume || 0;
-                        }
-                    });
-                    return { code: sCode, name: stockMap[sCode].name, diff: nVol - oVol };
-                }).filter(x => x.diff !== 0);
+                allStocks.forEach(s => {
+                    let oRow = oldRows.find(x => x.stock === s);
+                    let nRow = newRows.find(x => x.stock === s);
+                    let oVol = oRow ? Number(oRow.volume) : 0;
+                    let nVol = nRow ? Number(nRow.volume) : 0;
+                    let diff = nVol - oVol;
+                    let sName = nRow ? nRow.name : (oRow ? oRow.name : "未知股票");
 
-                let topBuy = [...list].sort((a,b) => b.diff - a.diff).slice(0, 10);
-                let topSell = [...list].sort((a,b) => a.diff - b.diff).slice(0, 10);
+                    if (!stockAdjustments[s]) {
+                        stockAdjustments[s] = { name: sName, netVol: 0 };
+                    }
+                    stockAdjustments[s].netVol += diff;
+                });
+            });
 
-                let maxBuy = topBuy.length > 0 ? Math.max(...topBuy.map(x => Math.abs(x.diff))) : 1;
-                let maxSell = topSell.length > 0 ? Math.max(...topSell.map(x => Math.abs(x.diff))) : 1;
+            let sortedArr = Object.keys(stockAdjustments).map(k => {
+                return { code: k, name: stockAdjustments[k].name, netVol: stockAdjustments[k].netVol };
+            });
 
-                document.getElementById('heatBuyBody').innerHTML = topBuy.map((x, i) => {
-                    let medalClass = i === 0 ? 'medal-1' : (i === 1 ? 'medal-2' : (i === 2 ? 'medal-3' : 'medal-other'));
-                    let medalContent = i < 3 ? `<i class="bi bi-trophy-fill"></i>` : (i + 1);
-                    let barWidth = maxBuy > 0 ? (Math.abs(x.diff) / maxBuy * 100) : 0;
-                    
-                    return `<tr>
-                        <td><span class="rank-medal ${medalClass}">${medalContent}</span></td>
-                        <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                        <td>
-                            <div class="heat-progress-container">
-                                <span class="font-monospace text-danger fw-bold">+${Math.round(x.diff).toLocaleString()} 股</span>
-                                <div class="progress heat-bar-wrapper d-none d-md-flex" style="height: 6px;">
-                                    <div class="progress-bar bg-danger" role="progressbar" style="width: ${barWidth}%"></div>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>`;
-                }).join('') || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
+            let buys = sortedArr.filter(x => x.netVol > 0).sort((a,b) => b.netVol - a.netVol);
+            let sells = sortedArr.filter(x => x.netVol < 0).sort((a,b) => a.netVol - b.netVol); 
 
-                document.getElementById('heatSellBody').innerHTML = topSell.map((x, i) => {
-                    let medalClass = i === 0 ? 'medal-1' : (i === 1 ? 'medal-2' : (i === 2 ? 'medal-3' : 'medal-other'));
-                    let medalContent = i < 3 ? `<i class="bi bi-trophy-fill"></i>` : (i + 1);
-                    let barWidth = maxSell > 0 ? (Math.abs(x.diff) / maxSell * 100) : 0;
-                    
-                    return `<tr>
-                        <td><span class="rank-medal ${medalClass}">${medalContent}</span></td>
-                        <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                        <td>
-                            <div class="heat-progress-container">
-                                <span class="font-monospace text-success fw-bold">${Math.round(x.diff).toLocaleString()} 股</span>
-                                <div class="progress heat-bar-wrapper d-none d-md-flex" style="height: 6px;">
-                                    <div class="progress-bar bg-success" role="progressbar" style="width: ${barWidth}%"></div>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>`;
-                }).join('') || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
-                
-                document.getElementById('loading').style.display = 'none';
-            }, 50);
+            let buyHtml = "";
+            buys.slice(0, 10).forEach((item, idx) => {
+                let rankClass = idx < 3 ? `medal-${idx+1}` : "medal-other";
+                buyHtml += `<tr>
+                    <td><span class="rank-medal ${rankClass}">${idx+1}</span></td>
+                    <td class="fw-bold">${item.code} <span class="text-muted small fw-normal ms-1">${item.name}</span></td>
+                    <td class="text-end font-monospace text-danger fw-bold">+${Math.round(item.netVol).toLocaleString()} 股</td>
+                </tr>`;
+            });
+            document.getElementById('heatBuyBody').innerHTML = buyHtml || '<tr><td colspan="3" class="text-center text-muted">無加碼數據</td></tr>';
+
+            let sellHtml = "";
+            sells.slice(0, 10).forEach((item, idx) => {
+                let rankClass = idx < 3 ? `medal-${idx+1}` : "medal-other";
+                sellHtml += `<tr>
+                    <td><span class="rank-medal ${rankClass}">${idx+1}</span></td>
+                    <td class="fw-bold text-secondary">${item.code} <span class="text-muted small fw-normal ms-1">${item.name}</span></td>
+                    <td class="text-end font-monospace text-success fw-bold">${Math.round(item.netVol).toLocaleString()} 股</td>
+                </tr>`;
+            });
+            document.getElementById('heatSellBody').innerHTML = sellHtml || '<tr><td colspan="3" class="text-center text-muted">無減持數據</td></tr>';
         }
 
+        // ==========================================
+        // 📊 ETF 交叉比較分析矩陣
+        // ==========================================
         function renderCompareMatrix() {
-            let checkedCbs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
-            
-            let summarySection = document.getElementById('compareSummarySection');
-            let summaryCards = document.getElementById('compareSummaryCards');
-            let coreCard = document.getElementById('coreHoldingsCard');
-            let uniqueCard = document.getElementById('uniqueHoldingsCard');
-            let placeholder = document.getElementById('comparePlaceholder');
-            
-            if(checkedCbs.length === 0) {
-                summarySection.style.display = 'none';
-                coreCard.style.display = 'none';
-                uniqueCard.style.display = 'none';
-                placeholder.style.display = 'block';
+            let checkedEtfs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
+            if (checkedEtfs.length === 0) {
+                document.getElementById('comparePlaceholder').style.display = 'block';
+                document.getElementById('compareSummarySection').style.display = 'none';
+                document.getElementById('coreHoldingsCard').style.display = 'none';
+                document.getElementById('uniqueHoldingsCard').style.display = 'none';
                 return;
             }
-            
-            placeholder.style.display = 'none';
-            
-            let baseHeader = '<th>股票代號</th><th>股票名稱</th><th>共同持有度</th>' + checkedCbs.map(c => `<th class="text-end font-monospace">${c}<br>權重</th>`).join('');
-            document.getElementById('compareCoreTableHeader').innerHTML = baseHeader;
-            document.getElementById('compareUniqueTableHeader').innerHTML = baseHeader;
-            
-            let dates = [...new Set(globalRawData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
-            let latestDate = dates[dates.length - 1];
-            
-            let stockMap = {};
-            globalRawData.forEach(r => {
-                if(r.date === latestDate && checkedCbs.includes(r.etf) && isNormalStock(r.stock, r.name)) {
-                    stockMap[r.stock] = r.name;
+
+            document.getElementById('comparePlaceholder').style.display = 'none';
+
+            let etfHoldingsMap = {}; 
+            let allStocks = new Set();
+            let stockNameMap = {};
+
+            checkedEtfs.forEach(e => {
+                let etfData = globalRawData.filter(d => d.etf === e);
+                let dates = [...new Set(etfData.map(d => d.date))].sort((a,b) => new Date(a) - new Date(b));
+                if (dates.length === 0) return;
+                let latestD = dates[dates.length - 1];
+                let latestRows = etfData.filter(d => d.date === latestD && isNormalStock(d.stock, d.name));
+
+                etfHoldingsMap[e] = latestRows;
+                latestRows.forEach(r => {
+                    allStocks.add(r.stock);
+                    stockNameMap[r.stock] = r.name;
+                });
+            });
+
+            let hCore = `<th>股票代號</th><th>股票名稱</th><th>共同持有比例</th>`;
+            let hUnique = `<th>股票代號</th><th>股票名稱</th><th>持有度 / 分佈</th>`;
+            checkedEtfs.forEach(e => {
+                hCore += `<th class="text-end">${e} 權重</th>`;
+                hUnique += `<th class="text-end">${e} 權重</th>`;
+            });
+            document.getElementById('compareCoreTableHeader').innerHTML = hCore;
+            document.getElementById('compareUniqueTableHeader').innerHTML = hUnique;
+
+            let coreHtml = "";
+            let uniqueHtml = "";
+            let overlapScores = []; 
+
+            Array.from(allStocks).forEach(sCode => {
+                let heldCount = 0;
+                let sumWeight = 0;
+                let rowWeights = {};
+
+                checkedEtfs.forEach(e => {
+                    let match = etfHoldingsMap[e] ? etfHoldingsMap[e].find(r => r.stock === sCode) : null;
+                    let w = match ? Number(match.weight) : 0;
+                    if (w > 0) {
+                        heldCount++;
+                        sumWeight += w;
+                    }
+                    rowWeights[e] = w;
+                });
+
+                let avgW = sumWeight / checkedEtfs.length;
+                let cellHtml = "";
+                checkedEtfs.forEach(e => {
+                    let w = rowWeights[e];
+                    let cellClass = "weight-none";
+                    if (w > 8) cellClass = "weight-high";
+                    else if (w > 4) cellClass = "weight-med";
+                    else if (w > 0) cellClass = "weight-low";
+                    
+                    cellHtml += `<td class="text-end font-monospace ${cellClass}">${w > 0 ? w.toFixed(2) + '%' : '-'}</td>`;
+                });
+
+                let name = stockNameMap[sCode];
+                let ratioPct = Math.round((heldCount / checkedEtfs.length) * 100);
+
+                overlapScores.push({ stock: sCode, name: name, heldCount: heldCount, avgWeight: avgW });
+
+                let rowStr = `<tr>
+                    <td class="font-monospace fw-bold">${sCode}</td>
+                    <td class="fw-bold">${name}</td>
+                    <td class="text-end font-monospace text-secondary fw-bold">${heldCount} / ${checkedEtfs.length} (${ratioPct}%)</td>
+                    ${cellHtml}
+                </tr>`;
+
+                if (heldCount === checkedEtfs.length) {
+                    coreHtml += rowStr;
+                } else {
+                    uniqueHtml += rowStr;
                 }
             });
-            
-            let stockAnalysis = [];
-            Object.keys(stockMap).forEach(sCode => {
-                let heldByCount = 0;
-                let totalWeightAcross = 0;
-                let details = {};
-                
-                checkedCbs.forEach(eCode => {
-                    let match = globalRawData.find(x => x.date === latestDate && x.etf === eCode && x.stock === sCode);
-                    let w = match ? Number(match.weight) : 0;
-                    if(w > 0) heldByCount++;
-                    totalWeightAcross += w;
-                    details[eCode] = w;
-                });
-                
-                stockAnalysis.push({
-                    code: sCode,
-                    name: stockMap[sCode],
-                    heldByCount: heldByCount,
-                    totalWeightAcross: totalWeightAcross,
-                    details: details
-                });
-            });
-            
-            stockAnalysis.sort((a, b) => {
-                if(b.heldByCount !== a.heldByCount) return b.heldByCount - a.heldByCount;
-                return b.totalWeightAcross - a.totalWeightAcross;
-            });
-            
-            let overlapStocks = stockAnalysis.filter(x => x.heldByCount > (checkedCbs.length > 1 ? 1 : 0));
-            let top3 = overlapStocks.slice(0, 3);
-            if(top3.length === 0 && stockAnalysis.length > 0) { top3 = stockAnalysis.slice(0, 3); }
-            
-            if(top3.length > 0) {
-                summarySection.style.display = 'block';
-                summaryCards.innerHTML = top3.map((x, idx) => {
-                    return `<div class="col-md-4">
-                        <div class="summary-card">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="badge bg-primary">Top ${idx+1} 重疊核心</span>
-                                <span class="badge bg-info text-dark">${x.heldByCount} / ${checkedCbs.length} 檔共同持有</span>
-                            </div>
-                            <h4 class="fw-bold text-dark mb-1 font-monospace">${x.code}</h4>
-                            <div class="text-secondary small fw-bold mb-2">${x.name}</div>
-                            <div class="text-primary fw-bold small"><i class="bi bi-pie-chart-fill me-1"></i>選定組合累積權重: ${x.totalWeightAcross.toFixed(2)}%</div>
+
+            document.getElementById('compareCoreTableBody').innerHTML = coreHtml || `<tr><td colspan="${checkedEtfs.length + 3}" class="text-center text-muted py-3">選取的 ETF 之間無共同完全重疊的核心持股</td></tr>`;
+            document.getElementById('compareUniqueTableBody').innerHTML = uniqueHtml || `<tr><td colspan="${checkedEtfs.length + 3}" class="text-center text-muted py-3">選取的 ETF 之間持股完全一致</td></tr>`;
+
+            document.getElementById('coreHoldingsCard').style.display = 'block';
+            document.getElementById('uniqueHoldingsCard').style.display = 'block';
+
+            overlapScores.sort((a,b) => b.heldCount - a.heldCount || b.avgWeight - a.avgWeight);
+            let summaryCardsHtml = "";
+            overlapScores.slice(0, 3).forEach((item, idx) => {
+                let ratio = Math.round((item.heldCount / checkedEtfs.length) * 100);
+                summaryCardsHtml += `<div class="col-md-4">
+                    <div class="summary-card">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="badge bg-primary">Top ${idx+1} 重疊焦點</span>
+                            <span class="badge bg-success-subtle text-success">${ratio}% 聯動</span>
                         </div>
-                    </div>`;
-                }).join('');
-            } else {
-                summarySection.style.display = 'none';
-            }
-            
-            let coreRowsHtml = "";
-            let uniqueRowsHtml = "";
-            
-            stockAnalysis.forEach(x => {
-                let isFullCore = (x.heldByCount === checkedCbs.length);
-                let badgeStyle = isFullCore ? 'bg-danger' : 'bg-secondary';
-                
-                let rowHtml = `<tr>
-                    <td><span class="badge bg-light text-dark font-monospace border">${x.code}</span></td>
-                    <td class="fw-bold">${x.name}</td>
-                    <td><span class="badge ${badgeStyle}">${x.heldByCount} / ${checkedCbs.length}</span></td>
-                    ${checkedCbs.map(c => {
-                        let w = x.details[c] || 0;
-                        return `<td class="text-end font-monospace ${w > 0 ? 'text-primary fw-bold' : 'text-muted'}">${w > 0 ? w.toFixed(2)+'%' : '-'}</td>`;
-                    }).join('')}
-                </tr>`;
-                
-                if(isFullCore) coreRowsHtml += rowHtml;
-                else uniqueRowsHtml += rowHtml;
+                        <h4 class="fw-bold text-dark font-monospace mb-1">${item.stock}</h4>
+                        <div class="fw-bold text-secondary fs-5 mb-2">${item.name}</div>
+                        <div class="small text-muted">選定組合中的平均加權持股比率: <b class="text-danger">${item.avgWeight.toFixed(2)}%</b></div>
+                    </div>
+                </div>`;
             });
-            
-            if(coreRowsHtml) {
-                coreCard.style.display = 'block';
-                document.getElementById('compareCoreTableBody').innerHTML = coreRowsHtml;
-            } else {
-                coreCard.style.display = 'none';
-            }
-            
-            if(uniqueRowsHtml) {
-                uniqueCard.style.display = 'block';
-                document.getElementById('compareUniqueTableBody').innerHTML = uniqueRowsHtml;
-            } else {
-                uniqueCard.style.display = 'none';
-            }
+            document.getElementById('compareSummaryCards').innerHTML = summaryCardsHtml;
+            document.getElementById('compareSummarySection').style.display = 'block';
         }
       </script>
     </body>
     </html>
     """
 
-    # 數據動態綁定填充注入
-    html_filled = html_template.replace("__DATA_PLACEHOLDER__", json_data) \
-                               .replace("__TWSE_PLACEHOLDER__", twse_json) \
-                               .replace("__TICKER_PLACEHOLDER__", ticker_json) \
-                               .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)
-
-    components.html(html_filled, height=920, scrolling=True)
+    html_code = html_template \
+        .replace("__DATA_PLACEHOLDER__", json_data) \
+        .replace("__TWSE_PLACEHOLDER__", twse_json) \
+        .replace("__TICKER_PLACEHOLDER__", ticker_json) \
+        .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)
+    
+    components.html(html_code, height=950, scrolling=True)
 
 if __name__ == "__main__":
     main()
