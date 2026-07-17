@@ -1215,7 +1215,7 @@ def main():
 
         // ==========================================
         // 💡 診斷核心與換股率分析 (嵌入在單檔分頁 Tab A)
-        # ==========================================
+        // ==========================================
         function runManagerStyleDiagnosis(etfName, dOld, dNew, sortedDates) {
             let etfData = globalRawData.filter(d => d.etf === etfName);
             let oldRows = etfData.filter(d => d.date === dOld);
