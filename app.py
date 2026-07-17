@@ -36,6 +36,9 @@ WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
 
+# FinMind API 金鑰（可放於 st.secrets 或環境變數中，若無則使用免費限制額度）
+FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
+
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
 # ==========================================
@@ -134,7 +137,52 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. 外部即時行情 API 整合模組
+# 3. FinMind PBR 批次查詢與快取（自動過濾美股/非台股）
+# ==========================================
+@st.cache_data(ttl=3600)  # 快取 1 小時，確保每小時呼叫次數極低，安全壓在 600 次限制內
+def fetch_pbr_weights_cached(stock_codes, date_str):
+    """
+    批次或單次查詢台灣個股的 PBR 數據。
+    自動過濾非台股格式（純數字且長度為4至6碼），避免浪費 FinMind 額度。
+    """
+    valid_stocks = []
+    # 嚴格正則表達式過濾：只允許純數字的台股代號（如 2330, 2454 等）
+    for code in stock_codes:
+        clean_code = str(code).strip()
+        if re.match(r"^\d{4,6}$", clean_code):
+            valid_stocks.append(clean_code)
+            
+    if not valid_stocks:
+        return {}
+
+    pbr_results = {}
+    
+    # 採取批次查詢，一次處理所有有效股票以節省 API 呼叫次數
+    for code in valid_stocks:
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset": "taiwan_stock_per_pbr",
+            "data_id": code,
+            "start_date": date_str,
+            "end_date": date_str,
+        }
+        if FINMIND_TOKEN:
+            params["token"] = FINMIND_TOKEN
+            
+        try:
+            res = requests.get(url, params=params, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                if data:
+                    # 取得最後一筆 PBR (股淨比)
+                    pbr_results[code] = data[-1].get("pbr", 0.0)
+        except Exception as e:
+            print(f"FinMind API 連線失敗 ({code}): {e}")
+            
+    return pbr_results
+
+# ==========================================
+# 4. 外部即時行情 API 整合模組
 # ==========================================
 def fetch_twse_live_data(etf_list):
     if not etf_list:
@@ -232,7 +280,7 @@ def process_and_standardize(raw_data, ticker_map=None):
     return df, None
 
 # ==========================================
-# 4. 主核心資料庫結構轉換與打包
+# 5. 主核心資料庫結構轉換與打包
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
@@ -247,11 +295,24 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
+    # 💡 整合 FinMind 快取計算：找出最新日期，批次獲取 PBR 資料
+    try:
+        latest_date = df['date'].max()
+        unique_stocks = df['stock'].unique().tolist()
+        # 自動過濾非台股 & 快取一小時，安全控制 API 頻率不超載
+        pbr_map = fetch_pbr_weights_cached(unique_stocks, latest_date)
+        
+        # 將 PBR 資料併入 records
+        df['pbr'] = df['stock'].map(pbr_map).fillna(0.0)
+    except Exception as e:
+        print(f"FinMind 數據併入失敗: {e}")
+        df['pbr'] = 0.0
+    
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map
 
 # ==========================================
-# 5. 主渲染邏輯
+# 6. 主渲染邏輯
 # ==========================================
 def main():
     json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
@@ -520,7 +581,7 @@ def main():
           <!-- 📡 升級頁面：主動型經理人共識雷達 -->
           <div class="custom-tab-content" id="content-g">
             <div class="card p-3 mb-4 bg-light border">
-              <div class="fw-bold text-dark mb-2"><i class="bi bi-check2-square me-1"></i>選取欲納入共識雷達分析範疇的主動式 ETF（預設全選）：</div>
+              <div class="fw-bold text-dark mb-2"><i class="bi bi-check2-square me-1"></i>選取欲納入共識雷達分析範疇的主動式 ETF（預設全不選）：</div>
               <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="radarCheckboxContainer"></div>
               
               <div class="row align-items-center g-3 mt-2">
@@ -563,7 +624,7 @@ def main():
                       <thead>
                         <tr>
                           <th>股票標的</th>
-                          <th class="text-end">共識 ETF 家數</th>
+                          <th class="text-end">共識家數</th>
                           <th class="px-4">詳細加碼主要陣容</th>
                         </tr>
                       </thead>
@@ -584,7 +645,7 @@ def main():
                       <thead>
                         <tr>
                           <th>股票標的</th>
-                          <th class="text-end">警示 ETF 家數</th>
+                          <th class="text-end">警示家數</th>
                           <th class="px-4">詳細減持主要陣容</th>
                         </tr>
                       </thead>
@@ -682,7 +743,7 @@ def main():
                       <div class="table-responsive" style="max-height: 450px;">
                         <table class="table table-hover align-middle">
                           <thead>
-                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th>最新持股(股)</th></tr>
+                            <tr><th>股票代號</th><th>股票名稱</th><th class="text-end">持股權重</th><th>PBR (股淨比)</th><th>最新持股(股)</th></tr>
                           </thead>
                           <tbody id="stockTableBody"></tbody>
                         </table>
@@ -936,7 +997,7 @@ def main():
                   </div>
                 </div>
                 <div class="col-md-3 pt-2">
-                  <button class="btn btn-danger w-100 btn-lg" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
+                  <button class="btn btn-danger w-100" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
                 </div>
               </div>
             </div>
@@ -1084,8 +1145,8 @@ def main():
                 listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
                 compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 
-                // 📡 升級：主動式經理人共識雷達複選清單，全數預設勾選
-                radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" checked onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
+                // 📡 共識雷達：預設不選（checked屬性已移除）
+                radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
 
                 let price = "-";
                 let changePct = "-";
@@ -1203,7 +1264,7 @@ def main():
                 let listChips = x.etfs.map(e => `<span class="badge bg-light text-danger border me-1"><b>${e}</b></span>`).join('');
                 return `<tr>
                     <td class="fw-bold">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                    <td class="text-end font-monospace fw-bold text-danger fs-5">${x.etfs.length} 檔 ETF</td>
+                    <td class="text-end font-monospace fw-bold text-danger fs-5">${x.etfs.length} 檔</td>
                     <td class="px-4">${listChips}</td>
                 </tr>`;
             }).join('');
@@ -1212,7 +1273,7 @@ def main():
                 let listChips = x.etfs.map(e => `<span class="badge bg-light text-secondary border me-1"><b>${e}</b></span>`).join('');
                 return `<tr>
                     <td class="fw-bold text-secondary">${x.code} <span class="text-muted small fw-normal ms-1">${x.name}</span></td>
-                    <td class="text-end font-monospace fw-bold text-muted fs-5">${x.etfs.length} 檔 ETF</td>
+                    <td class="text-end font-monospace fw-bold text-muted fs-5">${x.etfs.length} 檔</td>
                     <td class="px-4">${listChips}</td>
                 </tr>`;
             }).join('');
@@ -1341,13 +1402,14 @@ def main():
             let assets = latestRows.filter(r => !isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
 
             stocks.forEach(r => {
-                sHtml += `<tr><td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td><td class="fw-bold">${r.name}</td><td class="text-end font-monospace text-primary fw-bold">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace text-secondary">${Math.round(r.volume).toLocaleString()}</td></tr>`;
+                let pbrVal = r.pbr ? Number(r.pbr).toFixed(2) : "-";
+                sHtml += `<tr><td><span class="badge bg-light text-dark font-monospace border">${r.stock}</span></td><td class="fw-bold">${r.name}</td><td class="text-end font-monospace text-primary fw-bold">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace text-info">${pbrVal}</td><td class="text-end font-monospace text-secondary">${Math.round(r.volume).toLocaleString()}</td></tr>`;
             });
             assets.forEach(r => {
                 aHtml += `<tr><td><span class="badge bg-light text-muted font-monospace border">${r.stock || '-'}</span></td><td class="text-muted">${r.name}</td><td class="text-end font-monospace">${Number(r.weight).toFixed(2)}%</td><td class="text-end font-monospace">${Math.round(r.volume).toLocaleString()}</td></tr>`;
             });
 
-            sBody.innerHTML = sHtml || '<tr><td colspan="4" class="text-center text-muted">無成分股資料</td></tr>';
+            sBody.innerHTML = sHtml || '<tr><td colspan="5" class="text-center text-muted">無成分股資料</td></tr>';
             aBody.innerHTML = aHtml || '<tr><td colspan="4" class="text-center text-muted">無非股票資產</td></tr>';
 
             // 預設將時間拉回 20 日區間
