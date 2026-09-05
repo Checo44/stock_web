@@ -691,7 +691,7 @@ def main():
             </div>
           </div>
           
-          <div class="custom-tab-content" id="content-a">
+         <div class="custom-tab-content" id="content-a">
             <div class="row g-4">
               <div class="col-lg-3">
                 <div class="card p-3 sticky-top" style="top: 80px;">
@@ -918,19 +918,6 @@ def main():
                       </div>
                     </div>
                   </div>
-
-                  <div class="card">
-                    <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金經理人對此股票的區間籌碼調整明細</div>
-                    <div class="table-responsive">
-                      <table class="table table-hover align-middle">
-                        <thead>
-                          <tr><th>持有之 ETF</th><th>區間籌碼增減變動 (股數)</th></tr>
-                        </thead>
-                        <tbody id="stockDistBody"></tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
                 
                 <div class="col-md-8">
                   <div class="card">
