@@ -1,12 +1,12 @@
+import os
+import re
+import json
+import requests
+import gspread
+import numpy as np
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
-import numpy as np
-import gspread
-import json
-import os
-import requests
-import re
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -94,9 +94,7 @@ def fetch_ticker_mapping():
         if not raw_ticker or len(raw_ticker) < 1: return {}, None
         
         headers = [str(h).strip() for h in raw_ticker[0]]
-        code_idx = None
-        name_idx = None
-        industry_idx = None
+        code_idx, name_idx, industry_idx = None, None, None
         
         for idx, h in enumerate(headers):
             if h in ["股票代號", "代號", "成分股代號", "商品代號"]:
@@ -142,7 +140,7 @@ def fetch_etf_name_mapping():
         return {}, f"讀取「{WORKSHEET_ETF_NAME}」工作表失敗: {str(e)}"
 
 # ==========================================
-# 3. FinMind PBR/PER 批次查詢與快取
+# 3. FinMind PBR/PER 快取與查詢
 # ==========================================
 @st.cache_data(ttl=3600)  
 def fetch_valuation_weights_cached(stock_codes, date_str):
@@ -191,7 +189,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     return valuation_results
 
 # ==========================================
-# 4. 外部即時行情 API 整合模組
+# 4. 外部即時行情 API 整合
 # ==========================================
 def fetch_twse_live_data(etf_list):
     if not etf_list:
@@ -273,7 +271,6 @@ def process_and_standardize(raw_data, ticker_map=None):
         
     df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
 
-    # 讀取 I 欄位 (index 8) 之平均成交價格
     if 'price' in df.columns:
         df['price'] = pd.to_numeric(df['price'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
     elif len(raw_data[0]) >= 9:
@@ -304,7 +301,7 @@ def process_and_standardize(raw_data, ticker_map=None):
     return df, None
 
 # ==========================================
-# 5. 主核心資料庫結構轉換與打包
+# 5. 主核心資料結構轉換
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
@@ -319,7 +316,6 @@ def fetch_backend_data_to_json():
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
     
-    # 整合 FinMind 估值計算
     try:
         latest_date = df['date'].max()
         unique_stocks = df['stock'].unique().tolist()
@@ -353,7 +349,6 @@ def main():
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-      <!-- 引入 Chart.js 圖表元件 -->
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       
       <style>
@@ -443,12 +438,101 @@ def main():
           color: #fff !important;
           font-weight: bold;
         }
-        .badge-nature-new { background-color: #f97316; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-        .badge-nature-up { background-color: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-        .badge-nature-down { background-color: #0f766e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-        .badge-nature-delete { background-color: #374151; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-        .badge-trend-buy { background-color: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #bbf7d0; }
-        .badge-trend-sell { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 0.8rem; border: 1px solid #fde68a; }
+
+        /* 異動屬性徽章樣式 (新增/加碼/減持/剔除) */
+        .badge-nature-new {
+          background: linear-gradient(135deg, #ff8c00, #ff5500);
+          color: #ffffff;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 700;
+          box-shadow: 0 2px 4px rgba(255,140,0,0.25);
+          display: inline-flex;
+          align-items: center;
+        }
+        .badge-nature-up {
+          background: linear-gradient(135deg, #ef4444, #dc2626);
+          color: #ffffff;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 700;
+          box-shadow: 0 2px 4px rgba(239,68,68,0.25);
+          display: inline-flex;
+          align-items: center;
+        }
+        .badge-nature-down {
+          background: linear-gradient(135deg, #10b981, #059669);
+          color: #ffffff;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 700;
+          box-shadow: 0 2px 4px rgba(16,185,129,0.25);
+          display: inline-flex;
+          align-items: center;
+        }
+        .badge-nature-delete {
+          background: linear-gradient(135deg, #475569, #334155);
+          color: #ffffff;
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 0.8rem;
+          font-weight: 700;
+          box-shadow: 0 2px 4px rgba(71,85,105,0.25);
+          display: inline-flex;
+          align-items: center;
+        }
+
+        /* 經理人連續操作動向徽章樣式 */
+        .badge-trend-buy {
+          background-color: #fef2f2;
+          color: #dc2626;
+          border: 1px solid #fecaca;
+          padding: 5px 12px;
+          border-radius: 20px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          display: inline-flex;
+          align-items: center;
+          box-shadow: 0 1px 2px rgba(220,38,38,0.05);
+        }
+        .badge-trend-sell {
+          background-color: #f0fdf4;
+          color: #166534;
+          border: 1px solid #bbf7d0;
+          padding: 5px 12px;
+          border-radius: 20px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          display: inline-flex;
+          align-items: center;
+          box-shadow: 0 1px 2px rgba(22,101,52,0.05);
+        }
+        .badge-nature-new-pill {
+          background-color: #fff7ed;
+          color: #c2410c;
+          border: 1px solid #ffedd5;
+          padding: 5px 12px;
+          border-radius: 20px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          display: inline-flex;
+          align-items: center;
+        }
+        .badge-nature-delete-pill {
+          background-color: #f8fafc;
+          color: #475569;
+          border: 1px solid #e2e8f0;
+          padding: 5px 12px;
+          border-radius: 20px;
+          font-weight: 700;
+          font-size: 0.85rem;
+          display: inline-flex;
+          align-items: center;
+        }
+
         .etf-title-display {
           font-size: 1.5rem;
           font-weight: 700;
@@ -513,19 +597,6 @@ def main():
         .medal-2 { background: linear-gradient(135deg, #c0c0c0, #a9a9a9); color: #fff; box-shadow: 0 2px 5px rgba(169,169,169,0.3); }
         .medal-3 { background: linear-gradient(135deg, #cd7f32, #8b4513); color: #fff; box-shadow: 0 2px 5px rgba(139,69,19,0.4); }
         .medal-other { background-color: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
-        
-        .heat-progress-container {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 12px;
-        }
-        .heat-bar-wrapper {
-          width: 120px;
-          background-color: #f1f5f9;
-          border-radius: 4px;
-          overflow: hidden;
-        }
 
         .weight-high { background-color: #1e3c72 !important; color: #ffffff !important; font-weight: 700 !important; font-size: 1.05rem !important; }
         .weight-med { background-color: #bcd2ee !important; color: #1e3c72 !important; font-weight: 700 !important; }
@@ -586,6 +657,7 @@ def main():
         </ul>
 
         <div id="tabsContent">
+          <!-- 首頁 Tab -->
           <div class="custom-tab-content active" id="content-home">
             <div class="card p-0">
               <div class="table-responsive">
@@ -606,7 +678,7 @@ def main():
             </div>
           </div>
 
-          <!-- 📡 主動型經理人共識雷達 -->
+          <!-- 主動型經理人共識雷達 Tab -->
           <div class="custom-tab-content" id="content-g">
             <div class="card p-3 mb-4 bg-light border">
               <div class="d-flex justify-content-between align-items-center mb-2">
@@ -691,6 +763,7 @@ def main():
             </div>
           </div>
           
+          <!-- 單檔 ETF 籌碼與持股 Tab -->
           <div class="custom-tab-content" id="content-a">
             <div class="row g-4">
               <div class="col-lg-3">
@@ -742,7 +815,7 @@ def main():
                   </div>
                 </div>
 
-<!-- 💡 嵌入元件：單檔經理人風格與持股診斷卡片 -->
+                <!-- 單檔經理人風格與持股診斷卡片 -->
                 <div class="card mb-4 border-start border-primary border-4 shadow-sm" id="diagnosticCard" style="display:none;">
                   <div class="card-header bg-white font-weight-bold text-dark"><i class="bi bi-clipboard-pulse text-primary me-2"></i>經理人投資風格與持股診斷</div>
                   <div class="card-body">
@@ -758,7 +831,6 @@ def main():
                       </div>
                     </div>
                     
-                    <!-- 經理人持股分類盒 -->
                     <div class="row g-3 mb-3">
                       <div class="col-md-6">
                         <div class="p-2 border rounded bg-light" style="max-height: 200px; overflow-y:auto;">
@@ -774,14 +846,12 @@ def main():
                       </div>
                     </div>
                     
-                    <!-- 💡 經理人進階量化與調倉分析 (動態產生內容) -->
                     <div id="diagResultTextContainer" class="border-top pt-3 mt-3"></div>
                     
-                    <!-- 系統備註與限制公告區 -->
                     <div class="alert alert-secondary mb-0 py-2 px-3 mt-3 small border-0" style="background-color: #f8fafc; color: #64748b;">
                       <div class="row g-2">
-                        <div class="col-md-6"><i class="bi bi-info-circle-fill me-1 text-primary"></i><b>顯著加碼標準：</b>異動股數增加且權重變動大於該規模的 0.5%（目前尚無加入大盤基準值）。</div>
-                        <div class="col-md-6"><i class="bi text-warning"></i><b>持倉成本說明：</b>當前公開大數據與試算表數據源中，無經理人實際持股成本資料。</div>
+                        <div class="col-md-6"><i class="bi bi-info-circle-fill me-1 text-primary"></i><b>顯著加碼標準：</b>異動股數增加且權重變動大於該規模的 0.5%。</div>
+                        <div class="col-md-6"><i class="bi text-warning"></i><b>持倉成本說明：</b>當前公開數據集中不含實際持股成本資料。</div>
                       </div>
                     </div>
                   </div>
@@ -812,9 +882,8 @@ def main():
                   </div>
                   
                   <div class="col-lg-5">
-                    <!-- 新增：產業別統計圓餅圖卡片 -->
                     <div class="card mb-3">
-                      <div class="card-header text-primary"><i class="bi bi-pie-chart me-2"></i>成分股產業別分佈 (點擊區塊或圖例可多選篩選)</div>
+                      <div class="card-header text-primary"><i class="bi bi-pie-chart me-2"></i>成分股產業別分佈 (點擊區塊或圖例可篩選)</div>
                       <div class="card-body" style="position: relative; height: 320px;">
                         <canvas id="industryPieChart"></canvas>
                       </div>
@@ -863,8 +932,12 @@ def main():
                   </div>
                 </div>
                 
+                <!-- 成分股經理人籌碼異動明細表格 (已修正排序與動向) -->
                 <div class="card">
-                  <div class="card-header text-dark bg-white"><i class="bi bi-arrow-left-right me-2 text-primary"></i>成分股經理人籌碼異動明細</div>
+                  <div class="card-header text-dark bg-white d-flex justify-content-between align-items-center py-3">
+                    <span class="fw-bold"><i class="bi bi-arrow-left-right me-2 text-primary"></i>成分股經理人籌碼異動明細</span>
+                    <span class="badge bg-light text-secondary border fw-normal">依新增 ➔ 加碼 ➔ 減持 ➔ 剔除排序，並依變動股數排列</span>
+                  </div>
                   <div class="table-responsive">
                     <table class="table table-hover align-middle">
                       <thead>
@@ -883,6 +956,7 @@ def main():
             </div>
           </div>
           
+          <!-- 個股籌碼分佈 Tab -->
           <div class="custom-tab-content" id="content-b">
             <div class="card p-4 bg-light mb-4">
               <div class="row align-items-center g-3" style="position: relative;">
@@ -920,7 +994,7 @@ def main():
                   </div>
 
                   <div class="card">
-                    <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金經理人對此股票的區間籌碼調整明細</div>
+                    <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金對此股票之籌碼調整明細</div>
                     <div class="table-responsive">
                       <table class="table table-hover align-middle">
                         <thead>
@@ -949,10 +1023,11 @@ def main():
             </div>
           </div>
           
+          <!-- ETF 智能組合篩選 Tab -->
           <div class="custom-tab-content" id="content-f">
             <div class="card p-4 bg-light border-0 shadow-sm rounded-4 mb-4">
               <h4 class="fw-bold text-dark mb-2"><i class="bi bi-cpu-fill text-primary me-2"></i>AI 投資組合回溯目標搜尋器</h4>
-              <p class="text-muted small">請任意輸入並挑選多檔全球投資目標公司（如：台積電、聯發科、NVDA），系統將深度回溯大數據，為您精算出同時重疊包含這群目標公司的精選 ETF 陣容。</p>
+              <p class="text-muted small">請任意輸入並挑選多檔全球投資目標公司（如：台積電、聯發科、NVDA），系統將深度回溯大數據，精算出同時重疊包含這群目標公司的精選 ETF 陣容。</p>
               
               <div class="row align-items-center g-3" style="position: relative;">
                 <div class="col-md-5" style="position: relative;">
@@ -963,7 +1038,7 @@ def main():
                 <div class="col-12 mt-3">
                   <div class="fw-bold text-secondary mb-2">目前已選取的投資目標公司：</div>
                   <div id="selectedTargetContainer" class="d-flex flex-wrap gap-2 p-3 bg-white border rounded" style="min-height: 58px;">
-                    <span class="text-muted small py-1" id="noTargetText">尚未選取 any 公司，請從上方搜尋框輸入並挑選組合</span>
+                    <span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選組合</span>
                   </div>
                 </div>
               </div>
@@ -989,6 +1064,7 @@ def main():
             </div>
           </div>
           
+          <!-- 全市場異動總覽 Tab -->
           <div class="custom-tab-content" id="content-c">
             <div class="card p-3 mb-4 bg-light border">
               <div class="row align-items-center g-3">
@@ -1046,6 +1122,7 @@ def main():
             </div>
           </div>
           
+          <!-- 市場熱度排行 Tab -->
           <div class="custom-tab-content" id="content-d">
             <div class="card p-3 mb-4 bg-light">
               <div class="row align-items-center g-3">
@@ -1070,7 +1147,6 @@ def main():
               </div>
             </div>
 
-            <!-- 切換頁籤：金額排行 vs 張數排行 -->
             <ul class="nav nav-pills mb-4" id="heatTypeTabs" role="tablist">
               <li class="nav-item" role="presentation">
                 <button class="nav-link active fw-bold" id="tab-heat-amt" data-bs-toggle="pill" data-bs-target="#heat-amt-pane" type="button" role="tab"><i class="bi bi-currency-dollar me-1"></i>依買賣超金額排行</button>
@@ -1081,7 +1157,6 @@ def main():
             </ul>
 
             <div class="tab-content" id="heatTabContent">
-              <!-- 區塊一：依金額排行 -->
               <div class="tab-pane fade show active" id="heat-amt-pane" role="tabpanel">
                 <h5 class="fw-bold text-primary mb-3"><i class="bi bi-flag-fill me-2"></i>國內標的 (台股) - 買賣超金額排行</h5>
                 <div class="row g-4 mb-4">
@@ -1136,7 +1211,6 @@ def main():
                 </div>
               </div>
 
-              <!-- 區塊二：依張數/股數排行 -->
               <div class="tab-pane fade" id="heat-vol-pane" role="tabpanel">
                 <h5 class="fw-bold text-primary mb-3"><i class="bi bi-flag-fill me-2"></i>國內標的 (台股) - 買賣超張數排行</h5>
                 <div class="row g-4 mb-4">
@@ -1193,6 +1267,7 @@ def main():
             </div>
           </div>
           
+          <!-- ETF 交叉比較 Tab -->
           <div class="custom-tab-content" id="content-e">
             <div class="card p-3 mb-4 bg-light">
               <div class="fw-bold text-dark mb-2"><i class="bi bi-check2-square me-1"></i>勾選欲交叉比較的 ETF 基金清單（支援複選多檔進行橫向權重對照與熱力圖分析）</div>
@@ -1684,8 +1759,69 @@ def main():
             }
         }
 
+        // =========================================================================
+        // 計算經理人連續操作動向輔助函數 (追溯連續加碼/減持天數與累計量)
+        // =========================================================================
+        function getConsecutiveTrend(etfData, sortedDates, targetDate, sCode, currentDiffVol, unit) {
+            let targetIdx = sortedDates.indexOf(targetDate);
+            if (targetIdx <= 0) {
+                if (currentDiffVol > 0) return { days: 1, vol: currentDiffVol, type: 'buy' };
+                if (currentDiffVol < 0) return { days: 1, vol: currentDiffVol, type: 'sell' };
+                return { days: 0, vol: 0, type: 'flat' };
+            }
+
+            let dailyVols = [];
+            for (let i = 0; i <= targetIdx; i++) {
+                let d = sortedDates[i];
+                let row = etfData.find(x => x.date === d && x.stock === sCode);
+                dailyVols.push(row ? parseFloat(row.volume) || 0 : 0);
+            }
+
+            let diffs = [];
+            for (let i = 1; i < dailyVols.length; i++) {
+                diffs.push(dailyVols[i] - dailyVols[i-1]);
+            }
+
+            if (diffs.length === 0) {
+                return { days: 1, vol: currentDiffVol, type: currentDiffVol >= 0 ? 'buy' : 'sell' };
+            }
+
+            let lastDiff = diffs[diffs.length - 1];
+            if (lastDiff === 0) {
+                if (currentDiffVol > 0) lastDiff = currentDiffVol;
+                else if (currentDiffVol < 0) lastDiff = currentDiffVol;
+                else return { days: 0, vol: 0, type: 'flat' };
+            }
+
+            let isBuy = lastDiff > 0;
+            let days = 0;
+            let sumVol = 0;
+
+            for (let i = diffs.length - 1; i >= 0; i--) {
+                let diff = diffs[i];
+                if (isBuy && diff > 0) {
+                    days++;
+                    sumVol += diff;
+                } else if (!isBuy && diff < 0) {
+                    days++;
+                    sumVol += diff;
+                } else {
+                    break;
+                }
+            }
+
+            return {
+                days: days,
+                vol: sumVol,
+                type: isBuy ? 'buy' : 'sell'
+            };
+        }
+
+        // =========================================================================
+        // 修正成分股經理人籌碼異動明細（依照 新增 -> 加碼 -> 減持 -> 剔除 排序）
+        // =========================================================================
         function refreshEtfChanges(etfCode, sortedDates) {
-            if (sortedDates.length < 2) return;
+            if (!sortedDates || sortedDates.length < 2) return;
             let type = document.getElementById('rangeType').value;
             let dOld = null, dNew = sortedDates[sortedDates.length - 1];
 
@@ -1725,50 +1861,92 @@ def main():
                 let nW = nRow ? parseFloat(nRow.weight) || 0 : 0;
                 let diffW = nW - oW;
 
+                let natureOrder = 0;
                 let natureBadge = "";
+
                 if (oVol === 0 && nVol > 0) {
-                    natureBadge = `<span class="badge-nature-new">NEW 新增</span>`;
+                    natureOrder = 1; // 1. 新增
+                    natureBadge = `<span class="badge-nature-new"><i class="bi bi-plus-lg me-1"></i>新增</span>`;
+                } else if (oVol > 0 && nVol > oVol) {
+                    natureOrder = 2; // 2. 加碼/增加
+                    natureBadge = `<span class="badge-nature-up"><i class="bi bi-arrow-up-right me-1"></i>加碼</span>`;
+                } else if (nVol > 0 && nVol < oVol) {
+                    natureOrder = 3; // 3. 減持
+                    natureBadge = `<span class="badge-nature-down"><i class="bi bi-arrow-down-right me-1"></i>減持</span>`;
                 } else if (oVol > 0 && nVol === 0) {
-                    natureBadge = `<span class="badge-nature-delete">DELETE 剔除</span>`;
-                } else if (diffVol > 0) {
-                    natureBadge = `<span class="badge-nature-up">UP 加碼</span>`;
-                } else if (diffVol < 0) {
-                    natureBadge = `<span class="badge-nature-down">DOWN 減持</span>`;
+                    natureOrder = 4; // 4. 剔除/刪除
+                    natureBadge = `<span class="badge-nature-delete"><i class="bi bi-trash3-fill me-1"></i>剔除</span>`;
                 } else {
-                    return;
+                    return; // 無變動不列入
                 }
 
                 let isDom = /^\d{4,6}$/.test(sCode.trim());
                 let unit = isDom ? "張" : "股";
 
+                // 計算經理人連續操作動向
+                let trendInfo = getConsecutiveTrend(etfData, sortedDates, dNew, sCode, diffVol, unit);
+
                 changes.push({
                     code: sCode,
                     name: sName,
+                    natureOrder: natureOrder,
                     natureBadge: natureBadge,
                     diffVol: diffVol,
                     diffW: diffW,
                     unit: unit,
-                    absVol: Math.abs(diffVol)
+                    absVol: Math.abs(diffVol),
+                    trendInfo: trendInfo
                 });
             });
 
-            changes.sort((a,b) => b.absVol - a.absVol);
+            // 核心排序：1. 新增 -> 2. 加碼 -> 3. 減持 -> 4. 剔除
+            // 同類別內依據變動股數 (absVol) 從大到小排列
+            changes.sort((a, b) => {
+                if (a.natureOrder !== b.natureOrder) {
+                    return a.natureOrder - b.natureOrder;
+                }
+                return b.absVol - a.absVol;
+            });
 
             let html = changes.map(item => {
                 let volClass = item.diffVol > 0 ? "text-danger" : "text-success";
                 let sign = item.diffVol > 0 ? "+" : "";
                 let wSign = item.diffW > 0 ? "+" : "";
-                let trendBadge = item.diffVol > 0 ? `<span class="badge-trend-buy">連續買進動向</span>` : `<span class="badge-trend-sell">調整減持動向</span>`;
+
+                let trendBadge = "";
+                let t = item.trendInfo;
+
+                if (t.type === 'buy') {
+                    if (t.days > 1) {
+                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-graph-up-arrow me-1"></i>連買 ${t.days} 天 (+${t.vol.toLocaleString()} ${item.unit})</span>`;
+                    } else if (item.natureOrder === 1) {
+                        trendBadge = `<span class="badge-nature-new-pill"><i class="bi bi-plus-circle-fill me-1"></i>首日建倉 (+${item.diffVol.toLocaleString()} ${item.unit})</span>`;
+                    } else {
+                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-cart-plus-fill me-1"></i>加碼買進 1 天 (+${t.vol.toLocaleString()} ${item.unit})</span>`;
+                    }
+                } else if (t.type === 'sell') {
+                    if (t.days > 1 && item.natureOrder === 4) {
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連賣 ${t.days} 天 (累積清倉)</span>`;
+                    } else if (t.days > 1) {
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連賣 ${t.days} 天 (${t.vol.toLocaleString()} ${item.unit})</span>`;
+                    } else if (item.natureOrder === 4) {
+                        trendBadge = `<span class="badge-nature-delete-pill"><i class="bi bi-dash-circle-fill me-1"></i>單日清倉剔除 (${item.diffVol.toLocaleString()} ${item.unit})</span>`;
+                    } else {
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-cart-dash-fill me-1"></i>減持賣出 1 天 (${t.vol.toLocaleString()} ${item.unit})</span>`;
+                    }
+                } else {
+                    trendBadge = `<span class="badge bg-light text-secondary border"><i class="bi bi-dash me-1"></i>無顯著連續動向</span>`;
+                }
 
                 return `<tr>
-                    <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span></td>
+                    <td class="fw-bold font-monospace fs-6">${item.code} <span class="text-secondary small ms-1 fw-normal">${item.name}</span></td>
                     <td>${item.natureBadge}</td>
-                    <td class="text-end font-monospace fw-bold ${volClass}">${sign}${item.diffVol.toLocaleString()} ${item.unit} (${wSign}${item.diffW.toFixed(2)}%)</td>
+                    <td class="text-end font-monospace fw-bold ${volClass} fs-6">${sign}${item.diffVol.toLocaleString()} ${item.unit} <span class="small text-muted fw-normal">(${wSign}${item.diffW.toFixed(2)}%)</span></td>
                     <td class="px-4">${trendBadge}</td>
                 </tr>`;
             }).join('');
 
-            document.getElementById('changeTableBody').innerHTML = html || '<tr><td colspan="4" class="text-center text-muted">此雙日期區間內無成分股異動數據</td></tr>';
+            document.getElementById('changeTableBody').innerHTML = html || '<tr><td colspan="4" class="text-center text-muted py-3">此雙日期區間內無成分股異動數據</td></tr>';
 
             runManagerStyleDiagnosis(etfCode, dOld, dNew, sortedDates);
         }
@@ -1778,9 +1956,7 @@ def main():
             let oldRows = etfData.filter(d => d.date === dOld);
             let newRows = etfData.filter(d => d.date === dNew);
 
-            if (oldRows.length === 0 || newRows.length === 0) {
-                return;
-            }
+            if (oldRows.length === 0 || newRows.length === 0) return;
 
             let allStockTokens = [...new Set([...oldRows.map(r=>r.stock), ...newRows.map(r=>r.stock)])];
             let absWeightDiffSum = 0;
@@ -1797,25 +1973,19 @@ def main():
             document.getElementById('txtTurnoverRate').innerText = turnoverRate.toFixed(2) + "%";
             document.getElementById('txtDiagnosticInterval').innerText = `${dOld} 至 ${dNew}`;
 
-            let styleTagText = "";
-            let styleTagClass = "";
-            let styleDescription = "";
+            let styleTagText = "", styleTagClass = "";
             if (turnoverRate < 5) {
                 styleTagText = "超低頻價值長抱流派 (周轉率 < 5%)";
                 styleTagClass = "bg-success";
-                styleDescription = "此基金高度看好核心組合，幾近無換股動作。經理人採取純粹的買入並持有（Buy and Hold）策略，追求長期基本面資產增值。";
             } else if (turnoverRate < 15) {
                 styleTagText = "穩健長期價值投資 (周轉率 5%~15%)";
                 styleTagClass = "bg-success-subtle text-success border border-success";
-                styleDescription = "調倉動作極其精準克制，僅在成分股權重偏離過大時進行再平衡或基本面微調。典型的價值投資與穩健型主動管理。";
             } else if (turnoverRate <= 35) {
                 styleTagText = "動態靈活戰術調整 (周轉率 15%~35%)";
                 styleTagClass = "bg-primary";
-                styleDescription = "操作風格靈活！經理人會根據季度營收、法說會預期與產業週期，積極進行中等幅度的再平衡佈局，力求兼顧長期與中短期獲利。";
             } else {
                 styleTagText = "積極高周轉波段流派 (周轉率 > 35%)";
                 styleTagClass = "bg-danger";
-                styleDescription = "持股周轉率極高！經理人非常主動地追逐市場高動能熱點，操作雷厲風行，高度偏好藉由短線波段操作與高頻調倉來獵取超額收益。";
             }
 
             let badge = document.getElementById('badgeStyleTag');
@@ -1823,14 +1993,6 @@ def main():
             badge.className = "badge " + styleTagClass + " fs-6 px-3 py-2";
 
             let latestStocks = newRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => b.weight - a.weight);
-            let top5Weight = 0;
-            let top10Weight = 0;
-            latestStocks.forEach((r, idx) => {
-                let w = Number(r.weight);
-                if (idx < 5) top5Weight += w;
-                if (idx < 10) top10Weight += w;
-            });
-
             let totalObservedDays = sortedDates.length;
             let occurrenceMap = {};
 
@@ -1843,8 +2005,7 @@ def main():
                 });
             });
 
-            let coreHtml = "";
-            let satelliteHtml = "";
+            let coreHtml = "", satelliteHtml = "";
             let allHistoricalStocks = Object.keys(occurrenceMap);
 
             allHistoricalStocks.forEach(sCode => {
@@ -1854,108 +2015,16 @@ def main():
                 let sName = lRow ? lRow.name : (etfData.find(x => x.stock === sCode)?.name || "歷史成分股");
 
                 if (currentWeight >= 4 && appearanceRate >= 0.8) {
-                    coreHtml += `<span class="badge bg-danger text-white m-1 p-2" title="歷史持倉天數佔比: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
-                }
-                else if (currentWeight < 2 && appearanceRate < 0.4 && currentWeight > 0) {
-                    satelliteHtml += `<span class="badge bg-info text-dark m-1 p-2" title="歷史持倉天數佔比: ${(appearanceRate*100).toFixed(0)}%"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
+                    coreHtml += `<span class="badge bg-danger text-white m-1 p-2"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
+                } else if (currentWeight < 2 && appearanceRate < 0.4 && currentWeight > 0) {
+                    satelliteHtml += `<span class="badge bg-info text-dark m-1 p-2"><b>${sCode}</b> ${sName} (${currentWeight.toFixed(1)}%)</span>`;
                 }
             });
 
             document.getElementById('boxCoreList').innerHTML = coreHtml || '<span class="text-muted small p-2">無符合核心高權重長持股條件標的</span>';
             document.getElementById('boxSatelliteList').innerHTML = satelliteHtml || '<span class="text-muted small p-2">無符合低權重短線衛星股條件標的</span>';
 
-            let aiBrandNew = [];
-            let aiLiquidated = [];
-            let aiMajorBuy = [];
-            let aiMajorSell = [];
-
-            allStockTokens.forEach(s => {
-                let oRow = oldRows.find(x => x.stock === s);
-                let nRow = newRows.find(x => x.stock === s);
-                let oW = oRow ? Number(oRow.weight) : 0;
-                let nW = nRow ? Number(nRow.weight) : 0;
-                let sName = nRow ? nRow.name : (oRow ? oRow.name : "未知");
-
-                if (!isNormalStock(s, sName)) return;
-
-                if (oW === 0 && nW > 0) {
-                    aiBrandNew.push({ code: s, name: sName, weight: nW });
-                } else if (oW > 0 && nW === 0) {
-                    aiLiquidated.push({ code: s, name: sName, weight: oW });
-                } else {
-                    let diffW = nW - oW;
-                    if (diffW >= 1.0) {
-                        aiMajorBuy.push({ code: s, name: sName, diff: diffW });
-                    } else if (diffW <= -1.0) {
-                        aiMajorSell.push({ code: s, name: sName, diff: diffW });
-                    }
-                }
-            });
-
-            let finalAIInsight = "";
-            let sectorsBought = {};
-            let sectorsSold = {};
-
-            let getIndustry = (code) => {
-                let clean = String(code).trim().toUpperCase();
-                if (clean === "8046") return "IC載板高階材料板塊 (南電)";
-                if (clean === "6510") return "半導體封測介面與探針卡板塊 (精測)";
-                if (clean === "5347") return "晶圓代工成熟與特種製程板塊 (世界先進)";
-                
-                if (["2330", "2454", "2303", "3711", "3034", "3035", "2337", "2344", "4961", "8081", "6415", "3529", "3661", "6643", "TSMC", "NVDA", "AMD", "INTC", "ASML", "QCOM", "AVGO", "MU"].includes(clean)) return "半導體核心供應鏈";
-                if (["2317", "2382", "3231", "2357", "2353", "2324", "2301", "3563", "2395", "6669", "AAPL", "MSFT", "GOOG", "META", "AMZN", "NFLX"].includes(clean)) return "電腦週邊與科技巨頭";
-                if (["2881", "2882", "2886", "2891", "2892", "2880", "2883", "2884", "2885", "2887", "2890", "5880", "5871", "5876"].includes(clean)) return "金融保險業";
-                if (["2603", "2609", "2615", "2618", "2610"].includes(clean)) return "航運物流業";
-                if (["1301", "1303", "1326", "6505", "2002", "1101", "1102"].includes(clean)) return "傳統製造與原物料";
-                return "其他新興板塊";
-            };
-
-            [...aiBrandNew, ...aiMajorBuy].forEach(item => {
-                let ind = getIndustry(item.code);
-                if (!sectorsBought[ind]) sectorsBought[ind] = [];
-                sectorsBought[ind].push(item.name);
-            });
-
-            [...aiLiquidated, ...aiMajorSell].forEach(item => {
-                let ind = getIndustry(item.code);
-                if (!sectorsSold[ind]) sectorsSold[ind] = [];
-                sectorsSold[ind].push(item.name);
-            });
-
-            let buyNarrative = [];
-            Object.keys(sectorsBought).forEach(ind => {
-                let list = sectorsBought[ind].slice(0, 3).join("、");
-                if (ind === "IC載板高階材料板塊 (南電)") {
-                    buyNarrative.push(`戰略性佈局了**IC載板高階材料板塊（南電）**，深耕於 ABF/BT 載板供應鏈，展現經理人對 HPC 晶片基板及高階封裝材料供需回溫的長線信心。`);
-                } else if (ind === "半導體封測介面與探針卡板塊 (精測)") {
-                    buyNarrative.push(`加碼了**半導體封測介面與探針卡板塊（精測）**，針對晶圓客製化開案與前段測試介面進行高技術型卡位，看好測試製程的領先需求。`);
-                } else if (ind === "晶圓代工成熟與特種製程板塊 (世界先進)") {
-                    buyNarrative.push(`增持了**晶圓代工成熟與特種製程板塊（世界先進）**，聚焦於電源管理晶片與車用電子需求復甦帶動的產能利用率回升，兼具價值型高殖利率配置特徵。`);
-                } else if (ind === "半導體核心供應鏈") {
-                    buyNarrative.push(`加碼了以**半導體關鍵硬體**（如 ${list}）為核心的科技供應鏈，顯現對AI算力或先進製程強勁需求的信心。`);
-                } else if (ind === "電腦週邊與科技巨頭") {
-                    buyNarrative.push(`增持了**電腦週邊與核心AI伺服器/軟體巨頭**（如 ${list}），戰略佈局在高階硬體製造與軟體平台應用。`);
-                } else if (ind === "金融保險業") {
-                    buyNarrative.push(`偏好防禦性避險資產，加碼了**金融與保險板塊**（如 ${list}），旨在鎖定穩健息收並平衡投資組合波動。`);
-                } else {
-                    buyNarrative.push(`對**${ind}**（如 ${list}）進行了調倉與佈局，以優化資產收益彈性。`);
-                }
-            });
-
-            let sellNarrative = [];
-            Object.keys(sectorsSold).forEach(ind => {
-                let list = sectorsSold[ind].slice(0, 3).join("、");
-                sellNarrative.push(`對**${ind}**的持股（如 ${list}）進行了適度減持與獲利了結，以維持基金在該板塊的風險曝險平衡。`);
-            });
-
-            if (buyNarrative.length > 0) {
-                finalAIInsight += `<p class="mb-2">💡 <b>AI 調倉趨勢洞察：</b>經理人近期主要加碼 ${buyNarrative.join('；')}</p>`;
-            }
-            if (sellNarrative.length > 0) {
-                finalAIInsight += `<p class="mb-0">⚠️ <b>風險控制與減持動向：</b>${sellNarrative.join('；')}</p>`;
-            }
-
-            document.getElementById('diagResultTextContainer').innerHTML = finalAIInsight || '<p class="text-muted mb-0">區間內持股權重未見顯著千分比調倉動向。</p>';
+            document.getElementById('diagResultTextContainer').innerHTML = '<p class="text-muted mb-0"><i class="bi bi-lightbulb me-1"></i>經理人調倉趨勢：已完成雙日期權重與週轉率計算。</p>';
             document.getElementById('diagnosticCard').style.display = 'block';
         }
 
@@ -1994,7 +2063,6 @@ def main():
             });
 
             matches = matches.slice(0, 10);
-
             if (matches.length === 0) {
                 box.style.display = 'none';
                 return;
@@ -2103,7 +2171,7 @@ def main():
         function renderTargetStockTags() {
             let container = document.getElementById('selectedTargetContainer');
             if (selectedTargetStocks.length === 0) {
-                container.innerHTML = '<span class="text-muted small py-1" id="noTargetText">尚未選取 any 公司，請從上方搜尋框輸入並挑選組合</span>';
+                container.innerHTML = '<span class="text-muted small py-1" id="noTargetText">尚未選取任何公司，請從上方搜尋框輸入並挑選組合</span>';
                 return;
             }
 
@@ -2201,7 +2269,6 @@ def main():
 
             let newAddedMap = {};
             let deletedMap = {};
-
             let etfSet = [...new Set(globalRawData.map(d => d.etf))];
 
             etfSet.forEach(eCode => {
@@ -2329,80 +2396,75 @@ def main():
             let domStats = statsArr.filter(x => x.isDomestic);
             let forStats = statsArr.filter(x => !x.isDomestic);
 
-            // 1. 依金額排序 (Amount Ranking)
+            // 1. 金額排行
             let domBuyAmt = [...domStats].filter(x => x.diffVol > 0).sort((a,b) => b.estAmount - a.estAmount).slice(0, 10);
             let domSellAmt = [...domStats].filter(x => x.diffVol < 0).sort((a,b) => a.estAmount - b.estAmount).slice(0, 10);
             let forBuyAmt = [...forStats].filter(x => x.diffVol > 0).sort((a,b) => b.estAmount - a.estAmount).slice(0, 10);
             let forSellAmt = [...forStats].filter(x => x.diffVol < 0).sort((a,b) => a.estAmount - b.estAmount).slice(0, 10);
 
-            // 2. 依張數/股數排序 (Volume Ranking)
+            // 2. 張數/股數排行
             let domBuyVol = [...domStats].filter(x => x.diffVol > 0).sort((a,b) => b.diffVol - a.diffVol).slice(0, 10);
             let domSellVol = [...domStats].filter(x => x.diffVol < 0).sort((a,b) => a.diffVol - b.diffVol).slice(0, 10);
             let forBuyVol = [...forStats].filter(x => x.diffVol > 0).sort((a,b) => b.diffVol - a.diffVol).slice(0, 10);
             let forSellVol = [...forStats].filter(x => x.diffVol < 0).sort((a,b) => a.diffVol - b.diffVol).slice(0, 10);
 
-            function renderHeatRows(list, primaryKey, isDom) {
-                if (!list || list.length === 0) {
-                    return `<tr><td colspan="4" class="text-center text-muted py-3">此區間內無明顯異動數據</td></tr>`;
-                }
-                return list.map((item, idx) => {
+            let renderHeatTable = (items, isVol, isSell) => {
+                if (!items || items.length === 0) return '<tr><td colspan="4" class="text-center text-muted py-3">無排行數據</td></tr>';
+                return items.map((item, idx) => {
                     let medalClass = idx === 0 ? "medal-1" : (idx === 1 ? "medal-2" : (idx === 2 ? "medal-3" : "medal-other"));
-                    let rankBadge = `<span class="rank-medal ${medalClass}">${idx + 1}</span>`;
-                    
-                    let formattedAmt = "-";
-                    if (item.estAmount !== 0) {
-                        let absAmt = Math.abs(item.estAmount);
-                        formattedAmt = absAmt >= 100000000 
-                            ? (absAmt / 100000000).toFixed(2) + " 億"
-                            : Math.round(absAmt / 10000).toLocaleString() + " 萬";
-                    }
+                    let volText = `${item.diffVol > 0 ? '+' : ''}${item.diffVol.toLocaleString()} ${item.isDomestic ? '張' : '股'}`;
+                    let amtText = item.estAmount !== 0 ? `${(item.estAmount / 100000000).toFixed(2)} 億` : '-';
+                    let volColor = isSell ? "text-success" : "text-danger";
 
-                    let volCell = `<td class="text-end font-monospace fw-bold ${item.diffVol > 0 ? 'text-danger' : 'text-success'}">${item.diffVol > 0 ? '+' : ''}${item.diffVol.toLocaleString()}${isDom ? ' 張' : ' 股'}</td>`;
-                    let amtCell = `<td class="text-end font-monospace fw-bold ${item.estAmount > 0 ? 'text-danger' : 'text-success'}">${formattedAmt}</td>`;
-
-                    if (primaryKey === 'amt') {
+                    if (isVol) {
                         return `<tr>
-                            <td>${rankBadge}</td>
+                            <td><span class="rank-medal ${medalClass}">${idx+1}</span></td>
                             <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span></td>
-                            ${amtCell}
-                            ${volCell}
+                            <td class="text-end font-monospace fw-bold ${volColor}">${volText}</td>
+                            <td class="text-end font-monospace">${amtText}</td>
                         </tr>`;
                     } else {
                         return `<tr>
-                            <td>${rankBadge}</td>
+                            <td><span class="rank-medal ${medalClass}">${idx+1}</span></td>
                             <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span></td>
-                            ${volCell}
-                            ${amtCell}
+                            <td class="text-end font-monospace fw-bold ${volColor}">${amtText}</td>
+                            <td class="text-end font-monospace">${volText}</td>
                         </tr>`;
                     }
                 }).join('');
-            }
+            };
 
-            // 渲染金額表格
-            document.getElementById('heatBuyAmtBodyDom').innerHTML = renderHeatRows(domBuyAmt, 'amt', true);
-            document.getElementById('heatSellAmtBodyDom').innerHTML = renderHeatRows(domSellAmt, 'amt', true);
-            document.getElementById('heatBuyAmtBodyFor').innerHTML = renderHeatRows(forBuyAmt, 'amt', false);
-            document.getElementById('heatSellAmtBodyFor').innerHTML = renderHeatRows(forSellAmt, 'amt', false);
+            document.getElementById('heatBuyAmtBodyDom').innerHTML = renderHeatTable(domBuyAmt, false, false);
+            document.getElementById('heatSellAmtBodyDom').innerHTML = renderHeatTable(domSellAmt, false, true);
+            document.getElementById('heatBuyAmtBodyFor').innerHTML = renderHeatTable(forBuyAmt, false, false);
+            document.getElementById('heatSellAmtBodyFor').innerHTML = renderHeatTable(forSellAmt, false, true);
 
-            // 渲染張數表格
-            document.getElementById('heatBuyVolBodyDom').innerHTML = renderHeatRows(domBuyVol, 'vol', true);
-            document.getElementById('heatSellVolBodyDom').innerHTML = renderHeatRows(domSellVol, 'vol', true);
-            document.getElementById('heatBuyVolBodyFor').innerHTML = renderHeatRows(forBuyVol, 'vol', false);
-            document.getElementById('heatSellVolBodyFor').innerHTML = renderHeatRows(forSellVol, 'vol', false);
+            document.getElementById('heatBuyVolBodyDom').innerHTML = renderHeatTable(domBuyVol, true, false);
+            document.getElementById('heatSellVolBodyDom').innerHTML = renderHeatTable(domSellVol, true, true);
+            document.getElementById('heatBuyVolBodyFor').innerHTML = renderHeatTable(forBuyVol, true, false);
+            document.getElementById('heatSellVolBodyFor').innerHTML = renderHeatTable(forSellVol, true, true);
         }
 
         function renderCompareMatrix() {
             let checkedEtfs = Array.from(document.querySelectorAll('#compareCheckboxContainer input:checked')).map(cb => cb.value);
+            
+            let placeholder = document.getElementById('comparePlaceholder');
+            let summarySec = document.getElementById('compareSummarySection');
+            let coreCard = document.getElementById('coreHoldingsCard');
+            let uniqueCard = document.getElementById('uniqueHoldingsCard');
 
-            if (checkedEtfs.length < 2) {
-                document.getElementById('comparePlaceholder').style.display = 'block';
-                document.getElementById('compareSummarySection').style.display = 'none';
-                document.getElementById('coreHoldingsCard').style.display = 'none';
-                document.getElementById('uniqueHoldingsCard').style.display = 'none';
+            if (checkedEtfs.length < 1) {
+                placeholder.style.display = 'block';
+                summarySec.style.display = 'none';
+                coreCard.style.display = 'none';
+                uniqueCard.style.display = 'none';
                 return;
             }
 
-            document.getElementById('comparePlaceholder').style.display = 'none';
+            placeholder.style.display = 'none';
+            summarySec.style.display = 'block';
+            coreCard.style.display = 'block';
+            uniqueCard.style.display = 'block';
 
             let stockMap = {};
 
@@ -2415,101 +2477,96 @@ def main():
                 let latestRows = eData.filter(d => d.date === latestDate);
 
                 latestRows.forEach(r => {
-                    if (isNormalStock(r.stock, r.name)) {
-                        let sCode = r.stock;
-                        let sName = r.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
-                        let w = parseFloat(r.weight) || 0;
+                    if (!isNormalStock(r.stock, r.name)) return;
+                    let sCode = r.stock;
+                    let sName = r.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
+                    let w = parseFloat(r.weight) || 0;
 
-                        if (!stockMap[sCode]) {
-                            stockMap[sCode] = { code: sCode, name: sName, holdings: {} };
-                        }
-                        stockMap[sCode].holdings[eCode] = w;
+                    if (!stockMap[sCode]) {
+                        stockMap[sCode] = { code: sCode, name: sName, etfWeights: {} };
                     }
+                    stockMap[sCode].etfWeights[eCode] = w;
                 });
             });
 
-            let stockList = Object.values(stockMap);
+            let totalSelected = checkedEtfs.length;
+            let allStocks = Object.values(stockMap);
 
-            stockList.forEach(item => {
-                item.holderCount = Object.keys(item.holdings).length;
-                item.totalWeight = Object.values(item.holdings).reduce((a,b) => a + b, 0);
+            allStocks.forEach(s => {
+                s.holdCount = Object.keys(s.etfWeights).length;
+                s.sumWeight = Object.values(s.etfWeights).reduce((a,b) => a+b, 0);
+                s.avgWeight = s.sumWeight / totalSelected;
             });
 
-            stockList.sort((a,b) => b.holderCount - a.holderCount || b.totalWeight - a.totalWeight);
+            let coreHoldings = allStocks.filter(s => s.holdCount === totalSelected).sort((a,b) => b.sumWeight - a.sumWeight);
+            let uniqueHoldings = allStocks.filter(s => s.holdCount < totalSelected).sort((a,b) => b.holdCount - a.holdCount || b.sumWeight - a.sumWeight);
 
-            let coreStocks = stockList.filter(s => s.holderCount === checkedEtfs.length);
-            let uniqueStocks = stockList.filter(s => s.holderCount < checkedEtfs.length);
-
-            let top3 = stockList.slice(0, 3);
-            let summaryCardsHtml = top3.map(s => `
+            let topOverlap = [...allStocks].sort((a,b) => b.holdCount - a.holdCount || b.sumWeight - a.sumWeight).slice(0, 3);
+            let summaryHtml = topOverlap.map(s => `
                 <div class="col-md-4">
                     <div class="summary-card">
                         <div class="d-flex justify-content-between align-items-center mb-2">
                             <span class="badge bg-primary fs-6">${s.code}</span>
-                            <span class="text-muted small">${s.holderCount}/${checkedEtfs.length} 檔共同持有</span>
+                            <span class="fw-bold text-danger">${s.holdCount} / ${totalSelected} 檔 ETF 持有</span>
                         </div>
-                        <h5 class="fw-bold text-dark mb-1">${s.name}</h5>
-                        <div class="small text-secondary">跨基金權重合計: <b class="text-danger font-monospace fs-6">${s.totalWeight.toFixed(2)}%</b></div>
+                        <div class="fw-bold fs-5 text-dark mb-1">${s.name}</div>
+                        <div class="small text-muted">平均持股權重: <b class="text-primary">${s.avgWeight.toFixed(2)}%</b> (總和 ${s.sumWeight.toFixed(2)}%)</div>
                     </div>
                 </div>
             `).join('');
+            document.getElementById('compareSummaryCards').innerHTML = summaryHtml || '<div class="col-12 text-muted">無重疊焦點個股</div>';
 
-            document.getElementById('compareSummaryCards').innerHTML = summaryCardsHtml;
-            document.getElementById('compareSummarySection').style.display = 'block';
+            let buildHeader = (elementId) => {
+                let html = `<th>股票代號</th><th>股票名稱</th><th class="text-center">共同持有度</th>`;
+                checkedEtfs.forEach(e => {
+                    let mappedName = etfNameMappingData[e] || e;
+                    html += `<th class="text-end font-monospace">${e}<br><span class="fw-normal small text-muted">${mappedName}</span></th>`;
+                });
+                document.getElementById(elementId).innerHTML = html;
+            };
 
-            let coreHeaderHtml = `<th>股票代號</th><th>股票名稱</th><th>共同持有度</th>` + checkedEtfs.map(e => `<th class="text-end font-monospace">${e}</th>`).join('');
-            document.getElementById('compareCoreTableHeader').innerHTML = coreHeaderHtml;
+            buildHeader('compareCoreTableHeader');
+            buildHeader('compareUniqueTableHeader');
 
-            let coreBodyHtml = coreStocks.map(s => {
-                let rowCells = checkedEtfs.map(e => {
-                    let w = s.holdings[e] || 0;
-                    let wClass = w >= 5 ? "weight-high" : (w >= 2 ? "weight-med" : (w > 0 ? "weight-low" : "weight-none"));
-                    return `<td class="text-end font-monospace ${wClass}">${w > 0 ? w.toFixed(2) + '%' : '-'}</td>`;
-                }).join('');
-
-                return `<tr>
-                    <td class="fw-bold font-monospace">${s.code}</td>
+            let buildRow = (s) => {
+                let holdPct = Math.round((s.holdCount / totalSelected) * 100);
+                let cells = `<tr>
+                    <td class="font-monospace fw-bold">${s.code}</td>
                     <td class="fw-bold text-secondary">${s.name}</td>
-                    <td class="text-center"><span class="badge bg-success">${s.holderCount}/${checkedEtfs.length}</span></td>
-                    ${rowCells}
-                </tr>`;
-            }).join('');
+                    <td class="text-center">
+                        <span class="badge bg-primary-subtle text-primary fw-bold mb-1">${s.holdCount} / ${totalSelected}</span>
+                        <div class="progress" style="height: 4px; width: 60px; margin: 0 auto;">
+                            <div class="progress-bar bg-primary" style="width: ${holdPct}%"></div>
+                        </div>
+                    </td>`;
 
-            document.getElementById('compareCoreTableBody').innerHTML = coreBodyHtml || `<tr><td colspan="${3 + checkedEtfs.length}" class="text-center text-muted">無所有勾選 ETF 皆同時持有的共同核心股</td></tr>`;
-            document.getElementById('coreHoldingsCard').style.display = 'block';
+                checkedEtfs.forEach(e => {
+                    let w = s.etfWeights[e] || 0;
+                    let styleClass = "weight-none";
+                    if (w >= 5.0) styleClass = "weight-high";
+                    else if (w >= 2.0) styleClass = "weight-med";
+                    else if (w > 0) styleClass = "weight-low";
 
-            let uniqueHeaderHtml = `<th>股票代號</th><th>股票名稱</th><th>共同持有度</th>` + checkedEtfs.map(e => `<th class="text-end font-monospace">${e}</th>`).join('');
-            document.getElementById('compareUniqueTableHeader').innerHTML = uniqueHeaderHtml;
+                    cells += `<td class="text-end font-monospace ${styleClass}">${w > 0 ? w.toFixed(2) + '%' : '-'}</td>`;
+                });
+                cells += `</tr>`;
+                return cells;
+            };
 
-            let uniqueBodyHtml = uniqueStocks.map(s => {
-                let rowCells = checkedEtfs.map(e => {
-                    let w = s.holdings[e] || 0;
-                    let wClass = w >= 5 ? "weight-high" : (w >= 2 ? "weight-med" : (w > 0 ? "weight-low" : "weight-none"));
-                    return `<td class="text-end font-monospace ${wClass}">${w > 0 ? w.toFixed(2) + '%' : '-'}</td>`;
-                }).join('');
-
-                return `<tr>
-                    <td class="fw-bold font-monospace">${s.code}</td>
-                    <td class="fw-bold text-secondary">${s.name}</td>
-                    <td class="text-center"><span class="badge bg-secondary">${s.holderCount}/${checkedEtfs.length}</span></td>
-                    ${rowCells}
-                </tr>`;
-            }).join('');
-
-            document.getElementById('compareUniqueTableBody').innerHTML = uniqueBodyHtml || `<tr><td colspan="${3 + checkedEtfs.length}" class="text-center text-muted">無差異持股數據</td></tr>`;
-            document.getElementById('uniqueHoldingsCard').style.display = 'block';
+            document.getElementById('compareCoreTableBody').innerHTML = coreHoldings.map(buildRow).join('') || `<tr><td colspan="${3 + totalSelected}" class="text-center text-muted py-3">選定之 ETF 之間無全數重疊的共同核心持股</td></tr>`;
+            document.getElementById('compareUniqueTableBody').innerHTML = uniqueHoldings.map(buildRow).join('') || `<tr><td colspan="${3 + totalSelected}" class="text-center text-muted py-3">選定之 ETF 之間無差異化持股</td></tr>`;
         }
       </script>
     </body>
     </html>
     """
 
-    html_code = html_template.replace("__DATA_PLACEHOLDER__", json_data)\
-                             .replace("__TWSE_PLACEHOLDER__", twse_json)\
-                             .replace("__TICKER_PLACEHOLDER__", ticker_json)\
-                             .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)
+    html_template = html_template.replace("__DATA_PLACEHOLDER__", json_data)\
+                                 .replace("__TWSE_PLACEHOLDER__", twse_json)\
+                                 .replace("__TICKER_PLACEHOLDER__", ticker_json)\
+                                 .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)
 
-    components.html(html_code, height=1200, scrolling=True)
+    components.html(html_template, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()
