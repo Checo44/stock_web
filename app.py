@@ -742,7 +742,7 @@ def main():
                   </div>
                 </div>
 
-                <!-- 💡 嵌入元件：單檔經理人風格與持股診斷卡片 -->
+<!-- 💡 嵌入元件：單檔經理人風格與持股診斷卡片 -->
                 <div class="card mb-4 border-start border-primary border-4 shadow-sm" id="diagnosticCard" style="display:none;">
                   <div class="card-header bg-white font-weight-bold text-dark"><i class="bi bi-clipboard-pulse text-primary me-2"></i>經理人投資風格與持股診斷</div>
                   <div class="card-body">
