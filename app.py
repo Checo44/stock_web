@@ -37,6 +37,23 @@ WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
 
+# ETF 分類主設定：首頁、籌碼分布、ETF 交叉比較共用；
+# 全市場異動與市場熱度排行只取主動型。
+ETF_CATEGORY_CODES = {
+    "主動型": "00400A,00401A,00402A,00403A,00404A,00405A,00406A,00407A,00408A,00409A,00410A,00411A,00980A,00981A,00982A,00983A,00984A,00985A,00986A,00987A,00988A,00989A,00990A,00991A,00992A,00993A,00994A,00995A,00996A,00997A,00998A,00999A",
+    "高息型": "0056,00701,00702,00713,00730,00731,00771,00878,00882,00900,00907,00915,00918,00919,00929,00930,00932,00934,00936,00939,00940,00943,00944,00946,00956,00961,00962,00963,00964,00972",
+    "主題型": "0052,0053,0055,00678,00712,00714,00728,00735,00737,00757,00762,00770,00830,00851,00861,00875,00876,00877,00881,00886,00887,00891,00892,00893,00895,00896,00897,00898,00899,00901,00902,00903,00904,00909,00910,00911,00913,00916,00917,00920,00923,00927,00935,00941,00947,00951,00952,00954,00955,00960,00965,009801,009805,009807,009809,009815,009817,009818,009819,009821,009822,009824,009825,009827,009828",
+    "海外型": "0061,00639,00645,00646,00652,00660,00661,00662,00700,00703,00709,00717,00736,00739,00752,00783,00858,00885,00924,00926,00949,00971,009800,009806,009810,009811,009812,009813,009814,009820,009823,009826,009829",
+    "市值型": "0050,0051,0057,006201,006203,006204,006206,006207,006208,00690,00692,00733,00850,00888,00894,00905,00912,00921,00922,00928,00938,009802,009803,009804,009808,009816",
+}
+ETF_CATEGORY_ORDER = ["主動型", "高息型", "主題型", "海外型", "市值型"]
+ETF_CATEGORY_MAP = {
+    code.strip(): category
+    for category, codes in ETF_CATEGORY_CODES.items()
+    for code in codes.split(",")
+    if code.strip()
+}
+
 # FinMind API 金鑰
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 
@@ -397,6 +414,7 @@ def main():
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+    etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -724,6 +742,7 @@ def main():
                     <tr>
                       <th>ETF代號</th>
                       <th>ETF名稱</th>
+                      <th>分類</th>
                       <th>現價</th>
                       <th>漲跌幅</th>
                       <th>加權本益比</th>
@@ -1376,13 +1395,23 @@ def main():
         const twseLiveMarketData = __TWSE_PLACEHOLDER__;
         const tickerMappingData = __TICKER_PLACEHOLDER__;
         const etfNameMappingData = __ETF_NAME_PLACEHOLDER__;
+        const etfCategoryData = __ETF_CATEGORY_PLACEHOLDER__;
 
         // 可在此指定首頁、ETF清單、比較與雷達的顯示順序。
         // 未列出的 ETF 會依代號自然排序接在後面。
         const ETF_DISPLAY_ORDER = [
-            "00400A","00401A","00402A","00403A","00404A","00405A","00406A","00407A","00408A","00409A","00410A","00411A","00980A","00981A","00982A","00983A","00984A","00985A","00986A","00987A","00987A","00988A","00989A","00990A","00991A","00992A","00993A","00994A","00995A","00996A","00997A","00998A","00999A","0050","0051","0052","0053","0055","0056","0057","00690","00692","00701","00713","00728","00730","00731","00733","00850","00851","00878","00881","00888","00891","00892","00894","00900","00904","00905","00907","00912","00913","00915","00918","00919","00921","00922","00923","00928","00929","00932","00934","00935","00936","00938","00939","00940","00941","00943","00944","00946","00947","00952","00961","00962","006201","006203","006204","006208","009800","009802","009803","009804","009808","009809","0061","00639","00645","00646","00652","00660","00661","00662","00678","00700","00702","00703","00709","00717","00735","00736","00737","00739","00752","00757","00762","00770","00771","00783","00830","00858","00861","00875","00876","00877","00882","00885","00886","00887","00893","00895","00896","00897","00898","00899","00901","00902","00903","00909","00910","00911","00916","00917","00920","00924","00926","00930","00949","00951","00954","00955","00956","00960","00963","00964","00965","00971","00972","006206","006207","009801","009805","009806","009807","009810","009811","009812","009813","009814","009815","009817","009818","009819","009820","009822","009823","009824","009825","009826","009827","009828","009829"
+            "0050", "0051", "0052", "0053", "0056", "006208", "00878", "00919"
         ];
         const ETF_ORDER_INDEX = new Map(ETF_DISPLAY_ORDER.map((code, index) => [code, index]));
+        const CATEGORY_ORDER = ["主動型", "高息型", "主題型", "海外型", "市值型"];
+
+        function getEtfCategory(code) {
+            return etfCategoryData[code] || "未分類";
+        }
+
+        function isActiveEtf(code) {
+            return getEtfCategory(code) === "主動型";
+        }
 
         function toNumber(value) {
             if (value === null || value === undefined || value === "") return 0;
@@ -1395,6 +1424,9 @@ def main():
 
         function sortEtfCodes(codes) {
             return [...new Set(codes.filter(Boolean))].sort((a, b) => {
+                const ac = CATEGORY_ORDER.indexOf(getEtfCategory(a));
+                const bc = CATEGORY_ORDER.indexOf(getEtfCategory(b));
+                if (ac !== bc) return (ac < 0 ? 999 : ac) - (bc < 0 ? 999 : bc);
                 const ai = ETF_ORDER_INDEX.has(a) ? ETF_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
                 const bi = ETF_ORDER_INDEX.has(b) ? ETF_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
                 if (ai !== bi) return ai - bi;
@@ -1491,10 +1523,14 @@ def main():
 
             sortedEtfs.forEach((etf, index) => {
                 let mappedName = etfNameMappingData[etf] || "未知名稱";
-                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
-                compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
+                let category = getEtfCategory(etf);
+                let categoryBadge = `<span class="badge bg-light text-secondary border ms-1">${category}</span>`;
+                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span>${categoryBadge}</button>`;
+                compareHtml += `<div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span>${categoryBadge}</label></div>`;
                 
-                radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
+                if (isActiveEtf(etf)) {
+                    radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span>${categoryBadge}</label></div>`;
+                }
 
                 let quote = getLiveQuote(etf);
                 let price = quote.price > 0 ? quote.price.toFixed(2) : "-";
@@ -1538,6 +1574,7 @@ def main():
                 homeHtml += `<tr>
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
+                    <td>${categoryBadge}</td>
                     <td class="font-monospace fw-bold">${price}</td>
                     <td class="font-monospace ${styleColor}">${displayChange}</td>
                     <td class="font-monospace fw-bold text-info">${weightedPer}</td>
@@ -2215,6 +2252,7 @@ def main():
                     latestHolders.push({
                         etf: eCode,
                         etfName: etfNameMappingData[eCode] || eCode,
+                        etfCategory: getEtfCategory(eCode),
                         weight: toNumber(lRow.weight),
                         volume: nVol
                     });
@@ -2238,6 +2276,7 @@ def main():
                     changedHolders.push({
                         etf: eCode,
                         etfName: etfNameMappingData[eCode] || eCode,
+                        etfCategory: getEtfCategory(eCode),
                         diffVol: diffVol,
                         changeType: changeType,
                         badgeClass: badgeClass
@@ -2253,7 +2292,7 @@ def main():
             document.getElementById('trendStockStatus').innerText = totalVolDiff > 0 ? "淨買超加碼" : (totalVolDiff < 0 ? "淨賣超減持" : "持平");
 
             let distHtml = changedHolders.map(h => `<tr>
-                <td class="fw-bold font-monospace">${h.etf} <span class="text-muted small ms-1">${h.etfName}</span></td>
+                <td class="fw-bold font-monospace">${h.etf} <span class="text-muted small ms-1">${h.etfName}</span> <span class="badge bg-light text-secondary border">${h.etfCategory}</span></td>
                 <td class="text-end font-monospace ${h.diffVol > 0 ? 'text-danger' : 'text-success'}">
                     <span class="${h.badgeClass}">${h.changeType}</span>
                     ${h.diffVol > 0 ? '+' : ''}${h.diffVol.toLocaleString()} 股
@@ -2263,7 +2302,7 @@ def main():
 
             let distHtml2 = latestHolders.map(h => `<tr>
                 <td class="fw-bold font-monospace text-primary">${h.etf}</td>
-                <td class="fw-bold text-secondary">${h.etfName}</td>
+                <td class="fw-bold text-secondary">${h.etfName} <span class="badge bg-light text-secondary border">${h.etfCategory}</span></td>
                 <td class="text-end font-monospace fw-bold text-primary">${h.weight.toFixed(2)}%</td>
                 <td class="text-end font-monospace">${h.volume.toLocaleString()}</td>
             </tr>`).join('');
@@ -2305,7 +2344,7 @@ def main():
                 return;
             }
 
-            let etfSet = [...new Set(globalRawData.map(d => d.etf))];
+            let etfSet = sortEtfCodes([...new Set(globalRawData.map(d => d.etf))]);
             let results = [];
 
             etfSet.forEach(eCode => {
@@ -2384,7 +2423,8 @@ def main():
 
             let newAddedMap = {};
             let deletedMap = {};
-            let etfSet = [...new Set(globalRawData.map(d => d.etf))];
+            // 全市場異動總覽只計算主動型 ETF。
+            let etfSet = sortEtfCodes([...new Set(globalRawData.map(d => d.etf))]).filter(isActiveEtf);
 
             etfSet.forEach(eCode => {
                 let eOld = oldRows.filter(r => r.etf === eCode);
@@ -2475,17 +2515,19 @@ def main():
             let newRows = globalRawData.filter(d => d.date === dNew);
 
             let stockStats = {};
-            let allStocks = [...new Set([...oldRows.map(r => r.stock), ...newRows.map(r => r.stock)])];
+            let activeOldRows = oldRows.filter(r => isActiveEtf(r.etf));
+            let activeNewRows = newRows.filter(r => isActiveEtf(r.etf));
+            let allStocks = [...new Set([...activeOldRows.map(r => r.stock), ...activeNewRows.map(r => r.stock)])];
 
             allStocks.forEach(sCode => {
-                let sample = newRows.find(x => x.stock === sCode) || oldRows.find(x => x.stock === sCode);
+                let sample = activeNewRows.find(x => x.stock === sCode) || activeOldRows.find(x => x.stock === sCode);
                 if (!sample || !isNormalStock(sample.stock, sample.name)) return;
 
                 let sName = sample.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
                 let isDomestic = /^\d{4,6}$/.test(sCode.trim());
 
-                let oldVolSum = oldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
-                let newVolSum = newRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
+                let oldVolSum = activeOldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
+                let newVolSum = activeNewRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
                 let diffVol = newVolSum - oldVolSum;
 
                 if (diffVol === 0) return;
@@ -2679,7 +2721,8 @@ def main():
     html_template = html_template.replace("__DATA_PLACEHOLDER__", json_data)\
                                  .replace("__TWSE_PLACEHOLDER__", twse_json)\
                                  .replace("__TICKER_PLACEHOLDER__", ticker_json)\
-                                 .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)
+                                 .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
+                                 .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
 
     components.html(html_template, height=1200, scrolling=True)
 
