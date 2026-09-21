@@ -191,48 +191,92 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
 # ==========================================
 # 4. 外部即時行情 API 整合
 # ==========================================
-def fetch_twse_live_data(etf_list):
-    if not etf_list:
-        return {}
-    
-    valid_etfs = []
-    for code in etf_list:
-        c_clean = str(code).strip()
-        if c_clean and (c_clean.isdigit() or len(c_clean) >= 4):
-            valid_etfs.append(c_clean)
+TWSE_QUOTE_BATCH_SIZE = 25
 
+
+def _quote_number(value):
+    """將證交所的數字欄位安全轉成 float；'-'、空值與逗號都可處理。"""
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "").replace("%", "")
+    if text in {"", "-", "--", "N/A", "null", "None"}:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_code(value):
+    return (
+        str(value or "")
+        .strip()
+        .replace("'", "")
+        .replace("’", "")
+        .replace("＇", "")
+    )
+
+
+def fetch_twse_live_data(etf_list):
+    """分批讀取證交所行情，避免 179 檔 ETF 造成 URL 過長或請求被拒絕。"""
+    valid_etfs = list(dict.fromkeys(
+        code for code in (_normalise_code(item) for item in (etf_list or []))
+        if code and len(code) >= 4
+    ))
     if not valid_etfs:
         return {}
 
-    twse_market_data = {}
-    ch_elements = []
-    for code in valid_etfs:
-        ch_elements.append(f"tse_{code}.tw")
-        ch_elements.append(f"otc_{code}.tw")
-        
-    ch_param = "|".join(ch_elements)
-    api_url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={ch_param}"
+    api_url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://mis.twse.com.tw/"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Referer": "https://mis.twse.com.tw/",
+        "Accept": "application/json, text/plain, */*",
     }
-    try:
-        res = requests.get(api_url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            res_json = res.json()
-            msg_array = res_json.get("msgArray", [])
+    twse_market_data = {}
+
+    for start in range(0, len(valid_etfs), TWSE_QUOTE_BATCH_SIZE):
+        batch = valid_etfs[start:start + TWSE_QUOTE_BATCH_SIZE]
+        channels = [
+            channel
+            for code in batch
+            for channel in (f"tse_{code}.tw", f"otc_{code}.tw")
+        ]
+        try:
+            res = requests.get(
+                api_url,
+                params={"ex_ch": "|".join(channels)},
+                headers=headers,
+                timeout=15,
+            )
+            res.raise_for_status()
+            msg_array = res.json().get("msgArray", [])
             for msg in msg_array:
-                ex_ch = msg.get("c", "").strip() 
-                if ex_ch:
-                    twse_market_data[ex_ch] = {
-                        "d": msg.get("d", ""),  
-                        "z": msg.get("z", "-"),  
-                        "p": msg.get("p", "-"),  
-                        "y": msg.get("y", "-"),  
-                        "v": msg.get("v", "0")   
-                    }
-    except Exception as e:
-        print(f"證交所後端連線異常: {e}")
+                code = _normalise_code(msg.get("c", ""))
+                if not code:
+                    continue
+
+                last_price = _quote_number(msg.get("z"))
+                yesterday = _quote_number(msg.get("y"))
+                # 無成交時 z 常是 '-'，畫面仍顯示昨收，漲跌則視為 0。
+                display_price = last_price if last_price is not None else yesterday
+                change = None
+                change_pct = None
+                if last_price is not None and yesterday not in (None, 0):
+                    change = last_price - yesterday
+                    change_pct = change / yesterday * 100
+
+                twse_market_data[code] = {
+                    "d": msg.get("d", ""),
+                    "z": msg.get("z", "-"),
+                    "y": msg.get("y", "-"),
+                    "v": msg.get("v", "0"),
+                    "price": display_price,
+                    "change": change,
+                    "change_pct": change_pct,
+                }
+        except Exception as exc:
+            print(f"證交所行情批次 {start + 1}-{start + len(batch)} 讀取失敗：{exc}")
+
     return twse_market_data
 
 def process_and_standardize(raw_data, ticker_map=None):
@@ -265,11 +309,25 @@ def process_and_standardize(raw_data, ticker_map=None):
     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
     df = df.dropna(subset=['date'])
     
-    df['weight'] = pd.to_numeric(df['weight'].astype(str).str.replace('%','', regex=False).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
-    if df['weight'].max() <= 1.0: 
+    raw_weight = df['weight'].astype(str).str.strip()
+    has_explicit_percent = raw_weight.str.contains('%', regex=False).any()
+    df['weight'] = pd.to_numeric(
+        raw_weight.str.replace('%', '', regex=False)
+        .str.replace(',', '', regex=False),
+        errors='coerce',
+    ).fillna(0.0)
+    # 只有來源沒有 '%' 且整欄是小數比例時才轉成百分點。
+    # 例如來源為 0.98% 必須保留為 0.98，而不是被放大成 98。
+    if not has_explicit_percent and df['weight'].max() <= 1.0:
         df['weight'] = df['weight'] * 100
-        
-    df['volume'] = pd.to_numeric(df['volume'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
+
+    df['volume'] = pd.to_numeric(
+        df['volume'].astype(str)
+        .str.replace(',', '', regex=False)
+        .str.replace("'", '', regex=False)
+        .str.strip(),
+        errors='coerce',
+    ).fillna(0.0)
 
     if 'price' in df.columns:
         df['price'] = pd.to_numeric(df['price'].astype(str).str.replace(',','', regex=False).str.strip(), errors='coerce').fillna(0.0)
@@ -282,8 +340,8 @@ def process_and_standardize(raw_data, ticker_map=None):
     else:
         df['price'] = 0.0
 
-    df['stock'] = df['stock'].astype(str).str.strip()
-    df['etf'] = df['etf'].astype(str).str.strip()
+    df['stock'] = df['stock'].map(_normalise_code)
+    df['etf'] = df['etf'].map(_normalise_code)
     
     is_pure_english = df['stock'].str.match(r'^[A-Za-z]+$')
     df.loc[is_pure_english, 'stock'] = df.loc[is_pure_english, 'stock'] + ' US'
@@ -1319,6 +1377,50 @@ def main():
         const tickerMappingData = __TICKER_PLACEHOLDER__;
         const etfNameMappingData = __ETF_NAME_PLACEHOLDER__;
 
+        // 可在此指定首頁、ETF清單、比較與雷達的顯示順序。
+        // 未列出的 ETF 會依代號自然排序接在後面。
+        const ETF_DISPLAY_ORDER = [
+            "00400A","00401A","00402A","00403A","00404A","00405A","00406A","00407A","00408A","00409A","00410A","00411A","00980A","00981A","00982A","00983A","00984A","00985A","00986A","00987A","00987A","00988A","00989A","00990A","00991A","00992A","00993A","00994A","00995A","00996A","00997A","00998A","00999A","0050","0051","0052","0053","0055","0056","0057","00690","00692","00701","00713","00728","00730","00731","00733","00850","00851","00878","00881","00888","00891","00892","00894","00900","00904","00905","00907","00912","00913","00915","00918","00919","00921","00922","00923","00928","00929","00932","00934","00935","00936","00938","00939","00940","00941","00943","00944","00946","00947","00952","00961","00962","006201","006203","006204","006208","009800","009802","009803","009804","009808","009809","0061","00639","00645","00646","00652","00660","00661","00662","00678","00700","00702","00703","00709","00717","00735","00736","00737","00739","00752","00757","00762","00770","00771","00783","00830","00858","00861","00875","00876","00877","00882","00885","00886","00887","00893","00895","00896","00897","00898","00899","00901","00902","00903","00909","00910","00911","00916","00917","00920","00924","00926","00930","00949","00951","00954","00955","00956","00960","00963","00964","00965","00971","00972","006206","006207","009801","009805","009806","009807","009810","009811","009812","009813","009814","009815","009817","009818","009819","009820","009822","009823","009824","009825","009826","009827","009828","009829"
+        ];
+        const ETF_ORDER_INDEX = new Map(ETF_DISPLAY_ORDER.map((code, index) => [code, index]));
+
+        function toNumber(value) {
+            if (value === null || value === undefined || value === "") return 0;
+            if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+            const text = String(value).trim().replace(/['’＇,]/g, '').replace(/%/g, '');
+            if (!text || text === '-' || text === '--' || text.toLowerCase() === 'nan') return 0;
+            const number = Number(text);
+            return Number.isFinite(number) ? number : 0;
+        }
+
+        function sortEtfCodes(codes) {
+            return [...new Set(codes.filter(Boolean))].sort((a, b) => {
+                const ai = ETF_ORDER_INDEX.has(a) ? ETF_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
+                const bi = ETF_ORDER_INDEX.has(b) ? ETF_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
+                if (ai !== bi) return ai - bi;
+                return String(a).localeCompare(String(b), 'en', { numeric: true });
+            });
+        }
+
+        function getLiveQuote(code) {
+            const quote = twseLiveMarketData[code];
+            if (!quote) return { price: 0, changePct: null, volume: 0 };
+
+            const price = toNumber(quote.price) || toNumber(quote.z) || toNumber(quote.y);
+            const yesterday = toNumber(quote.y);
+            let changePct = quote.change_pct;
+            if (changePct === null || changePct === undefined || changePct === '') {
+                changePct = price > 0 && yesterday > 0 ? ((price - yesterday) / yesterday) * 100 : null;
+            } else {
+                changePct = toNumber(changePct);
+            }
+            return {
+                price: price,
+                changePct: changePct,
+                volume: toNumber(quote.v)
+            };
+        }
+
         let selectedEtf = null;
         let selectedTargetStocks = [];
         let currentEtfStocks = [];       
@@ -1353,8 +1455,8 @@ def main():
             let meta = ["昨收價", "漲跌", "市價", "張數", "股數", "規模", "折溢價", "昨收", "UNDEFINED", "NULL"];
             if (!code || code.trim() === "") return false;
             
-            let cleanCode = code.trim();
-            let cleanName = name ? name.trim() : "";
+            let cleanCode = String(code).trim();
+            let cleanName = name ? String(name).trim() : "";
             
             if (meta.includes(cleanCode) || (cleanName && meta.includes(cleanName))) return false;
             
@@ -1376,7 +1478,7 @@ def main():
         function initDashboard() {
             let etfSet = new Set();
             globalRawData.forEach(r => { if(r.etf) etfSet.add(r.etf); });
-            let sortedEtfs = Array.from(etfSet).sort();
+            let sortedEtfs = sortEtfCodes(Array.from(etfSet));
 
             let listGroup = document.getElementById('etfListGroup');
             let compareContainer = document.getElementById('compareCheckboxContainer');
@@ -1394,25 +1496,14 @@ def main():
                 
                 radarHtml += `<div class="form-check form-check-inline"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
 
-                let price = "-";
-                let changePct = "-";
-                let twseData = twseLiveMarketData[etf] || null;
-                if (twseData) {
-                    let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
-                    let yesterdayPrice = parseFloat(twseData.y) || 0;
-                    if (priceVal > 0) {
-                        price = priceVal.toFixed(2);
-                        if (yesterdayPrice > 0) {
-                            let diff = priceVal - yesterdayPrice;
-                            changePct = ((diff / yesterdayPrice) * 100).toFixed(2);
-                        }
-                    }
-                }
+                let quote = getLiveQuote(etf);
+                let price = quote.price > 0 ? quote.price.toFixed(2) : "-";
+                let changePct = quote.changePct === null ? "-" : quote.changePct.toFixed(2);
                 
                 let styleColor = "";
-                if(parseFloat(changePct) > 0) styleColor = "text-danger fw-bold";
-                if(parseFloat(changePct) < 0) styleColor = "text-success fw-bold";
-                let displayChange = changePct !== "-" ? (parseFloat(changePct) > 0 ? `+${changePct}%` : `${changePct}%`) : "-";
+                if(toNumber(changePct) > 0) styleColor = "text-danger fw-bold";
+                if(toNumber(changePct) < 0) styleColor = "text-success fw-bold";
+                let displayChange = changePct !== "-" ? (toNumber(changePct) > 0 ? `+${changePct}%` : `${changePct}%`) : "-";
 
                 let etfData = globalRawData.filter(d => d.etf === etf);
                 let dates = etfData.map(d => d.date);
@@ -1605,24 +1696,14 @@ def main():
 
             let latestRows = etfData.filter(d => d.date === latestDate);
 
-            let twseData = twseLiveMarketData[etfCode] || null;
-            if (twseData) {
-                let priceVal = parseFloat(twseData.z) || parseFloat(twseData.p) || 0;
-                let yesterdayPrice = parseFloat(twseData.y) || 0;
-                let diff = priceVal - yesterdayPrice;
-                let changePct = yesterdayPrice > 0 ? ((diff / yesterdayPrice) * 100).toFixed(2) : "-";
-                
-                document.getElementById('metaMarketPrice').innerText = priceVal > 0 ? priceVal.toFixed(2) : "-";
-                document.getElementById('metaChange').innerText = changePct !== "-" ? (parseFloat(changePct) > 0 ? `+${changePct}%` : `${changePct}%`) : "-";
-                document.getElementById('metaVolume').innerText = twseData.v ? parseInt(twseData.v).toLocaleString() : "-";
-            } else {
-                document.getElementById('metaMarketPrice').innerText = "-";
-                document.getElementById('metaChange').innerText = "-";
-                document.getElementById('metaVolume').innerText = "-";
-            }
+            let quote = getLiveQuote(etfCode);
+            let changePct = quote.changePct === null ? "-" : quote.changePct.toFixed(2);
+            document.getElementById('metaMarketPrice').innerText = quote.price > 0 ? quote.price.toFixed(2) : "-";
+            document.getElementById('metaChange').innerText = changePct !== "-" ? (toNumber(changePct) > 0 ? `+${changePct}%` : `${changePct}%`) : "-";
+            document.getElementById('metaVolume').innerText = quote.volume > 0 ? quote.volume.toLocaleString() : "-";
 
-            let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => parseFloat(b.weight) - parseFloat(a.weight));
-            let nonStocks = latestRows.filter(r => !isNormalStock(r.stock, r.name)).sort((a,b) => parseFloat(b.weight) - parseFloat(a.weight));
+            let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => toNumber(b.weight) - toNumber(a.weight));
+            let nonStocks = latestRows.filter(r => !isNormalStock(r.stock, r.name)).sort((a,b) => toNumber(b.weight) - toNumber(a.weight));
 
             currentEtfStocks = stocks;
             selectedIndustries = [];
@@ -1631,8 +1712,8 @@ def main():
             let assetHtml = nonStocks.map(r => `<tr>
                 <td class="font-monospace">${r.stock}</td>
                 <td>${r.name || r.stock}</td>
-                <td class="text-end font-monospace">${parseFloat(r.weight).toFixed(2)}%</td>
-                <td class="text-end font-monospace">${parseInt(r.volume).toLocaleString()}</td>
+                <td class="text-end font-monospace">${toNumber(r.weight).toFixed(2)}%</td>
+                <td class="text-end font-monospace">${toNumber(r.volume).toLocaleString()}</td>
             </tr>`).join('');
             document.getElementById('assetTableBody').innerHTML = assetHtml || '<tr><td colspan="4" class="text-center text-muted">無非股票資產項目</td></tr>';
 
@@ -1672,8 +1753,8 @@ def main():
                 return `<tr>
                     <td class="font-monospace fw-bold">${r.stock}</td>
                     <td class="fw-bold">${r.name || r.stock} <span class="text-muted small">(${r.industry || '未分類'})</span></td>
-                    <td class="text-end font-monospace fw-bold text-primary">${parseFloat(r.weight).toFixed(2)}%</td>
-                    <td class="text-end font-monospace">${parseInt(r.volume).toLocaleString()}</td>
+                    <td class="text-end font-monospace fw-bold text-primary">${toNumber(r.weight).toFixed(2)}%</td>
+                    <td class="text-end font-monospace">${toNumber(r.volume).toLocaleString()}</td>
                     <td class="text-end font-monospace">${perText}</td>
                 </tr>`;
             }).join('');
@@ -1689,7 +1770,7 @@ def main():
             let industryMap = {};
             stocks.forEach(r => {
                 let ind = r.industry || '未分類';
-                let w = parseFloat(r.weight) || 0;
+                let w = toNumber(r.weight);
                 industryMap[ind] = (industryMap[ind] || 0) + w;
             });
 
@@ -1774,7 +1855,7 @@ def main():
             for (let i = 0; i <= targetIdx; i++) {
                 let d = sortedDates[i];
                 let row = etfData.find(x => x.date === d && x.stock === sCode);
-                dailyVols.push(row ? parseFloat(row.volume) || 0 : 0);
+                dailyVols.push(row ? toNumber(row.volume) : 0);
             }
 
             let diffs = [];
@@ -1821,7 +1902,10 @@ def main():
         // 修正成分股經理人籌碼異動明細（依照 新增 -> 加碼 -> 減持 -> 剔除 排序）
         // =========================================================================
         function refreshEtfChanges(etfCode, sortedDates) {
-            if (!sortedDates || sortedDates.length < 2) return;
+            if (!sortedDates || sortedDates.length < 2) {
+                document.getElementById('changeTableBody').innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">目前沒有足夠的兩個交易日可比較</td></tr>';
+                return;
+            }
             let type = document.getElementById('rangeType').value;
             let dOld = null, dNew = sortedDates[sortedDates.length - 1];
 
@@ -1837,7 +1921,10 @@ def main():
                 }
             }
 
-            if (!dOld || !dNew) return;
+            if (!dOld || !dNew || dOld === dNew) {
+                document.getElementById('changeTableBody').innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">請選擇兩個不同的資料日期</td></tr>';
+                return;
+            }
 
             let etfData = globalRawData.filter(d => d.etf === etfCode);
             let oldRows = etfData.filter(d => d.date === dOld);
@@ -1853,12 +1940,12 @@ def main():
 
                 if (!isNormalStock(sCode, sName)) return;
 
-                let oVol = oRow ? parseFloat(oRow.volume) || 0 : 0;
-                let nVol = nRow ? parseFloat(nRow.volume) || 0 : 0;
+                let oVol = oRow ? toNumber(oRow.volume) : 0;
+                let nVol = nRow ? toNumber(nRow.volume) : 0;
                 let diffVol = nVol - oVol;
 
-                let oW = oRow ? parseFloat(oRow.weight) || 0 : 0;
-                let nW = nRow ? parseFloat(nRow.weight) || 0 : 0;
+                let oW = oRow ? toNumber(oRow.weight) : 0;
+                let nW = nRow ? toNumber(nRow.weight) : 0;
                 let diffW = nW - oW;
 
                 let natureOrder = 0;
@@ -2105,8 +2192,9 @@ def main():
             document.getElementById('resStockTitle').innerText = `${targetCode} ${targetName}`;
             document.getElementById('stockResultContainer').style.display = 'block';
 
-            let etfSet = [...new Set(globalRawData.map(d => d.etf))];
+            let etfSet = sortEtfCodes([...new Set(globalRawData.map(d => d.etf))]);
             let latestHolders = [];
+            let changedHolders = [];
             let totalVolDiff = 0;
 
             etfSet.forEach(eCode => {
@@ -2116,35 +2204,62 @@ def main():
 
                 let latestDate = dates[dates.length - 1];
                 let lRow = eData.find(d => d.date === latestDate && d.stock === targetCode);
+                let oRow = dates.length >= 2
+                    ? eData.find(d => d.date === dates[dates.length - 2] && d.stock === targetCode)
+                    : null;
+                let oVol = oRow ? toNumber(oRow.volume) : 0;
+                let nVol = lRow ? toNumber(lRow.volume) : 0;
+                let diffVol = nVol - oVol;
+
                 if (lRow) {
                     latestHolders.push({
                         etf: eCode,
                         etfName: etfNameMappingData[eCode] || eCode,
-                        weight: parseFloat(lRow.weight) || 0,
-                        volume: parseFloat(lRow.volume) || 0
+                        weight: toNumber(lRow.weight),
+                        volume: nVol
                     });
                 }
 
                 if (dates.length >= 2) {
-                    let oldDate = dates[dates.length - 2];
-                    let oRow = eData.find(d => d.date === oldDate && d.stock === targetCode);
-                    let oVol = oRow ? parseFloat(oRow.volume) || 0 : 0;
-                    let nVol = lRow ? parseFloat(lRow.volume) || 0 : 0;
-                    totalVolDiff += (nVol - oVol);
+                    totalVolDiff += diffVol;
+                }
+
+                // 左側只顯示有異動的 ETF；沒有變動的基金不列入。
+                if (diffVol !== 0) {
+                    let changeType = diffVol > 0 ? "加碼" : "減持";
+                    let badgeClass = diffVol > 0 ? "badge-trend-buy" : "badge-trend-sell";
+                    if (oVol === 0 && nVol > 0) {
+                        changeType = "新增";
+                        badgeClass = "badge-nature-new-pill";
+                    } else if (oVol > 0 && nVol === 0) {
+                        changeType = "剔除";
+                        badgeClass = "badge-nature-delete-pill";
+                    }
+                    changedHolders.push({
+                        etf: eCode,
+                        etfName: etfNameMappingData[eCode] || eCode,
+                        diffVol: diffVol,
+                        changeType: changeType,
+                        badgeClass: badgeClass
+                    });
                 }
             });
 
             latestHolders.sort((a,b) => b.weight - a.weight);
+            changedHolders.sort((a,b) => Math.abs(b.diffVol) - Math.abs(a.diffVol));
 
             let totalVolStr = totalVolDiff > 0 ? `+${totalVolDiff.toLocaleString()} 股` : `${totalVolDiff.toLocaleString()} 股`;
             document.getElementById('trendStockTotalVol').innerText = totalVolStr;
             document.getElementById('trendStockStatus').innerText = totalVolDiff > 0 ? "淨買超加碼" : (totalVolDiff < 0 ? "淨賣超減持" : "持平");
 
-            let distHtml = latestHolders.map(h => `<tr>
+            let distHtml = changedHolders.map(h => `<tr>
                 <td class="fw-bold font-monospace">${h.etf} <span class="text-muted small ms-1">${h.etfName}</span></td>
-                <td class="text-end font-monospace">${h.volume.toLocaleString()} 股</td>
+                <td class="text-end font-monospace ${h.diffVol > 0 ? 'text-danger' : 'text-success'}">
+                    <span class="${h.badgeClass}">${h.changeType}</span>
+                    ${h.diffVol > 0 ? '+' : ''}${h.diffVol.toLocaleString()} 股
+                </td>
             </tr>`).join('');
-            document.getElementById('stockDistBody').innerHTML = distHtml || '<tr><td colspan="2" class="text-center text-muted">無持有數據</td></tr>';
+            document.getElementById('stockDistBody').innerHTML = distHtml || '<tr><td colspan="2" class="text-center text-muted">最近區間沒有 ETF 籌碼異動</td></tr>';
 
             let distHtml2 = latestHolders.map(h => `<tr>
                 <td class="fw-bold font-monospace text-primary">${h.etf}</td>
@@ -2207,7 +2322,7 @@ def main():
                 selectedTargetStocks.forEach(target => {
                     let match = latestRows.find(r => r.stock === target.code);
                     if (match) {
-                        let w = parseFloat(match.weight) || 0;
+                        let w = toNumber(match.weight);
                         totalMatchWeight += w;
                         matchedHoldings.push({ code: target.code, name: target.name, weight: w });
                     }
@@ -2369,15 +2484,15 @@ def main():
                 let sName = sample.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
                 let isDomestic = /^\d{4,6}$/.test(sCode.trim());
 
-                let oldVolSum = oldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + (parseFloat(r.volume) || 0), 0);
-                let newVolSum = newRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + (parseFloat(r.volume) || 0), 0);
+                let oldVolSum = oldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
+                let newVolSum = newRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
                 let diffVol = newVolSum - oldVolSum;
 
                 if (diffVol === 0) return;
 
-                let price = parseFloat(sample.price) || 0;
+                let price = toNumber(sample.price);
                 if (price === 0 && isDomestic && twseLiveMarketData[sCode]) {
-                    price = parseFloat(twseLiveMarketData[sCode].z) || parseFloat(twseLiveMarketData[sCode].p) || 0;
+                    price = getLiveQuote(sCode).price;
                 }
 
                 let estAmount = diffVol * price;
@@ -2480,7 +2595,7 @@ def main():
                     if (!isNormalStock(r.stock, r.name)) return;
                     let sCode = r.stock;
                     let sName = r.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
-                    let w = parseFloat(r.weight) || 0;
+                    let w = toNumber(r.weight);
 
                     if (!stockMap[sCode]) {
                         stockMap[sCode] = { code: sCode, name: sName, etfWeights: {} };
