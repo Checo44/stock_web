@@ -1,12 +1,12 @@
 import os
 import re
 import json
-import base64
 import requests
 import gspread
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -3301,10 +3301,9 @@ def main():
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
 
-    iframe_src = "data:text/html;base64," + base64.b64encode(
-        html_template.encode("utf-8")
-    ).decode("ascii")
-    st.iframe(iframe_src, height=1200)
+    # 互動頁面包含 JavaScript 與 Chart.js；使用 components.html 可確保
+    # Streamlit Cloud 重新整理後仍能執行嵌入腳本，避免 data URL iframe 黑屏。
+    components.html(html_template, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()
