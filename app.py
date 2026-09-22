@@ -828,6 +828,23 @@ def main():
               </div>
             </div>
             <div class="row g-3 mb-3" id="categorySummary"></div>
+            <div class="card p-3 mb-3">
+              <div class="row g-2 align-items-center">
+                <div class="col-md-5">
+                  <input id="homeEtfSearch" class="form-control" placeholder="搜尋 ETF 代號或名稱" oninput="applyHomeFilters()">
+                </div>
+                <div class="col-md-3">
+                  <select id="homeSortSelect" class="form-select" onchange="applyHomeFilters()">
+                    <option value="default">依分類與代號</option>
+                    <option value="changeDesc">漲幅由高至低</option>
+                    <option value="changeAsc">跌幅由高至低</option>
+                    <option value="priceDesc">現價由高至低</option>
+                    <option value="name">名稱排序</option>
+                  </select>
+                </div>
+                <div class="col-md-4 text-muted small" id="homeFilterStatus">顯示全部 ETF</div>
+              </div>
+            </div>
             <div class="card p-0">
               <div class="table-responsive">
                 <table class="table home-table align-middle">
@@ -843,6 +860,15 @@ def main():
                     </tr>
                   </thead>
                   <tbody id="homeTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header text-secondary"><i class="bi bi-database-check me-2"></i>ETF 資料更新完整度</div>
+              <div class="table-responsive" style="max-height: 420px;">
+                <table class="table table-hover align-middle">
+                  <thead><tr><th>ETF</th><th>分類</th><th>最新資料日</th><th>歷史交易日數</th><th>最新成分股數</th><th>狀態</th></tr></thead>
+                  <tbody id="coverageTableBody"></tbody>
                 </table>
               </div>
             </div>
@@ -999,6 +1025,7 @@ def main():
                     <option value="海外型">海外型</option>
                     <option value="市值型">市值型</option>
                   </select>
+                  <input id="etfListSearch" class="form-control form-control-sm mb-3" placeholder="搜尋代號或名稱" oninput="filterEtfListByCategory()">
                   <div class="list-group etf-list-group" id="etfListGroup"></div>
                 </div>
               </div>
@@ -1009,6 +1036,12 @@ def main():
                     <span id="txtEtfCode" class="badge bg-primary me-2 font-monospace"></span>
                     <span id="txtEtfName"></span>
                     <span id="txtUpdateDate" class="update-date-text"></span>
+                  </div>
+                </div>
+                <div class="card p-3 mb-3">
+                  <div class="row g-2 align-items-center">
+                    <div class="col-md-5"><input id="holdingSearchInput" class="form-control" placeholder="篩選成分股代號或名稱" oninput="renderStockTable()"></div>
+                    <div class="col-md-7 text-muted small" id="etfChangeSummary">選取 ETF 後顯示區間持股摘要</div>
                   </div>
                 </div>
                 
@@ -1131,6 +1164,13 @@ def main():
                       </div>
                     </div>
 
+                    <div class="card mb-3">
+                      <div class="card-header text-primary"><i class="bi bi-graph-up me-2"></i>前五大成分股歷史權重趨勢</div>
+                      <div class="card-body" style="position: relative; height: 320px;">
+                        <canvas id="weightTrendChart"></canvas>
+                      </div>
+                    </div>
+
                     <div class="card">
                       <div class="card-header text-secondary"><i class="bi bi-cash-coin me-2"></i>非股票資產項目</div>
                       <div class="table-responsive" style="max-height: 350px;">
@@ -1218,7 +1258,15 @@ def main():
                     <option value="市值型">市值型</option>
                   </select>
                 </div>
-                <div class="col-md-2 pt-md-4">
+                <div class="col-md-2">
+                  <label class="form-label fw-bold text-secondary">比較區間</label>
+                  <select id="stockChangeRange" class="form-select">
+                    <option value="1" selected>前一交易日</option>
+                    <option value="5">前 5 個交易日</option>
+                    <option value="20">前 20 個交易日</option>
+                  </select>
+                </div>
+                <div class="col-md-1 pt-md-4">
                   <button class="btn btn-primary btn-lg w-100" onclick="searchStockDistribution()"><i class="bi bi-pie-chart me-1"></i>分析分佈</button>
                 </div>
               </div>
@@ -1350,7 +1398,9 @@ def main():
                   </div>
                 </div>
                 <div class="col-md-3 pt-md-4">
-                  <button class="btn btn-success w-100" onclick="loadGlobalChanges()"><i class="bi bi-arrow-repeat me-1"></i>生成全市場異動報表</button>
+                  <button class="btn btn-success w-100 mb-2" onclick="loadGlobalChanges()"><i class="bi bi-arrow-repeat me-1"></i>生成全市場異動報表</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100" onclick="downloadTableCsv('globalNewBody', 'global_new_changes.csv')">下載新增 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100 mt-1" onclick="downloadTableCsv('globalDelBody', 'global_deleted_changes.csv')">下載剔除 CSV</button>
                 </div>
               </div>
             </div>
@@ -1403,7 +1453,9 @@ def main():
                   </div>
                 </div>
                 <div class="col-md-3 pt-md-4">
-                  <button class="btn btn-danger w-100" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
+                  <button class="btn btn-danger w-100 mb-2" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100" onclick="downloadTableCsv('heatBuyAmtBodyDom', 'market_heat_buy_amount.csv')">下載買超金額 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100 mt-1" onclick="downloadTableCsv('heatSellAmtBodyDom', 'market_heat_sell_amount.csv')">下載賣超金額 CSV</button>
                 </div>
               </div>
             </div>
@@ -1545,6 +1597,10 @@ def main():
                   </select>
                 </div>
                 <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer"></div>
+                <div class="mt-2 text-end">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareCoreTableBody', 'etf_compare_core.csv')">下載共同核心 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareUniqueTableBody', 'etf_compare_unique.csv')">下載差異持股 CSV</button>
+                </div>
             </div>
             <div class="row g-3 mb-4" id="compareSelectionSummary"></div>
             
@@ -1687,6 +1743,7 @@ def main():
         let currentEtfStocks = [];       
         let selectedIndustries = [];     
         let industryChartInstance = null; 
+        let weightTrendChartInstance = null;
 
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
@@ -1736,6 +1793,27 @@ def main():
                 return false;
             }
             return true;
+        }
+
+        function downloadTableCsv(tbodyId, filename) {
+            const tbody = document.getElementById(tbodyId);
+            if (!tbody) return;
+            const table = tbody.closest('table');
+            if (!table) return;
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const csv = rows.map(row => Array.from(row.cells).map(cell => {
+                const text = cell.innerText.replace(/\s+/g, ' ').trim().replace(/"/g, '""');
+                return `"${text}"`;
+            }).join(',')).join('\n');
+            const blob = new Blob(["\uFEFF" + csv], {type: 'text/csv;charset=utf-8;'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
         }
 
         function initDashboard() {
@@ -1801,7 +1879,7 @@ def main():
                 let weightedPer = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
                 let weightedPbr = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
 
-                homeHtml += `<tr data-category="${category}">
+                homeHtml += `<tr data-category="${category}" data-change="${quote.changePct === null ? 0 : quote.changePct}" data-price="${quote.price || 0}">
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
                     <td>${categoryBadgeHtml(category)}</td>
@@ -1817,6 +1895,8 @@ def main():
             if(radarContainer) radarContainer.innerHTML = radarHtml;
             document.getElementById('homeTableBody').innerHTML = homeHtml;
             renderCategorySummary();
+            renderCoverageTable();
+            applyHomeFilters();
 
             if(sortedEtfs.length > 0) {
                 selectEtf(sortedEtfs[0]);
@@ -1830,13 +1910,41 @@ def main():
         function setHomeCategory(selected, button) {
             document.querySelectorAll('#homeCategoryTabs .category-tab').forEach(tab => tab.classList.remove('active'));
             if (button) button.classList.add('active');
+            activeHomeCategory = selected;
             filterHomeByCategory(selected);
         }
 
+        let activeHomeCategory = 'all';
+
         function filterHomeByCategory(selected = 'all') {
-            document.querySelectorAll('#homeTableBody tr').forEach(row => {
-                row.style.display = categoryMatches(row, selected) ? '' : 'none';
+            activeHomeCategory = selected;
+            applyHomeFilters();
+        }
+
+        function applyHomeFilters() {
+            const query = (document.getElementById('homeEtfSearch')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('homeSortSelect')?.value || 'default';
+            const body = document.getElementById('homeTableBody');
+            if (!body) return;
+            const rows = Array.from(body.querySelectorAll('tr'));
+            const visible = rows.filter(row => {
+                const categoryOk = activeHomeCategory === 'all' || row.dataset.category === activeHomeCategory;
+                const textOk = !query || row.innerText.toUpperCase().includes(query);
+                row.style.display = categoryOk && textOk ? '' : 'none';
+                return categoryOk && textOk;
             });
+            if (sortType !== 'default') {
+                visible.sort((a, b) => {
+                    if (sortType === 'name') return a.cells[1].innerText.localeCompare(b.cells[1].innerText, 'zh-Hant');
+                    if (sortType === 'changeDesc') return Number(b.dataset.change || 0) - Number(a.dataset.change || 0);
+                    if (sortType === 'changeAsc') return Number(a.dataset.change || 0) - Number(b.dataset.change || 0);
+                    if (sortType === 'priceDesc') return Number(b.dataset.price || 0) - Number(a.dataset.price || 0);
+                    return 0;
+                });
+                visible.forEach(row => body.appendChild(row));
+            }
+            const status = document.getElementById('homeFilterStatus');
+            if (status) status.innerText = `顯示 ${visible.length} / ${rows.length} 檔 ETF${query ? `｜搜尋：${query}` : ''}`;
         }
 
         function renderCategorySummary() {
@@ -1971,8 +2079,10 @@ def main():
 
         function filterEtfListByCategory() {
             const selected = document.getElementById('etfCategoryFilter').value;
+            const query = (document.getElementById('etfListSearch')?.value || '').trim().toUpperCase();
             document.querySelectorAll('#etfListGroup .etf-item-btn').forEach(button => {
-                button.style.display = categoryMatches(button, selected) ? '' : 'none';
+                const textOk = !query || button.innerText.toUpperCase().includes(query);
+                button.style.display = categoryMatches(button, selected) && textOk ? '' : 'none';
             });
         }
 
@@ -2182,14 +2292,30 @@ def main():
             document.getElementById('metaTop10Weight').innerText = `${top10Weight.toFixed(2)}%`;
             document.getElementById('metaHoldingCount').innerText = stocks.length.toLocaleString();
 
+            const previousDate = dates.length > 1 ? dates[dates.length - 2] : null;
+            const previousRows = previousDate ? etfData.filter(d => d.date === previousDate && isNormalStock(d.stock, d.name)) : [];
+            const currentWeight = stocks.reduce((sum, row) => sum + toNumber(row.weight), 0);
+            const previousWeight = previousRows.reduce((sum, row) => sum + toNumber(row.weight), 0);
+            const previousMap = new Map(previousRows.map(row => [row.stock, `${row.weight}|${row.volume}`]));
+            const changedCount = stocks.filter(row => previousMap.get(row.stock) !== `${row.weight}|${row.volume}`).length
+                + previousRows.filter(row => !stocks.some(current => current.stock === row.stock)).length;
+            const weightDiff = currentWeight - previousWeight;
+            document.getElementById('etfChangeSummary').innerText = previousDate
+                ? `前一交易日 ${previousDate}｜成分股 ${stocks.length} 檔｜權重合計 ${currentWeight.toFixed(2)}%（${weightDiff >= 0 ? '+' : ''}${weightDiff.toFixed(2)}%）｜異動 ${changedCount} 檔`
+                : `目前只有 ${latestDate} 資料，尚無前一交易日可比較`;
+
             renderIndustryPieChart(stocks);
             refreshEtfChanges(etfCode, dates);
         }
 
         function renderStockTable() {
             let filtered = currentEtfStocks;
+            const query = (document.getElementById('holdingSearchInput')?.value || '').trim().toUpperCase();
             if (selectedIndustries.length > 0) {
                 filtered = currentEtfStocks.filter(r => selectedIndustries.includes(r.industry || '未分類'));
+            }
+            if (query) {
+                filtered = filtered.filter(r => `${r.stock} ${r.name || ''}`.toUpperCase().includes(query));
             }
 
             let container = document.getElementById('selectedIndustryDisplayContainer');
@@ -2660,17 +2786,20 @@ def main():
 
                 let latestDate = dates[dates.length - 1];
                 let lRow = eData.find(d => d.date === latestDate && d.stock === targetCode);
-                let oRow = dates.length >= 2
-                    ? eData.find(d => d.date === dates[dates.length - 2] && d.stock === targetCode)
+                const rangeOffset = parseInt(document.getElementById('stockChangeRange')?.value || '1');
+                const oldIndex = dates.length - 1 - rangeOffset;
+                let oRow = oldIndex >= 0
+                    ? eData.find(d => d.date === dates[oldIndex] && d.stock === targetCode)
                     : null;
                 let oVol = oRow ? toNumber(oRow.volume) : 0;
                 let nVol = lRow ? toNumber(lRow.volume) : 0;
-                let diffVol = nVol - oVol;
+                // 區間不足時只顯示目前持有量，不把「沒有基準日」誤判成新增。
+                let diffVol = oldIndex >= 0 ? nVol - oVol : 0;
                 totalHoldingVol += nVol;
                 const stockCategory = getEtfCategory(eCode);
                 if (stockCategoryStats[stockCategory]) {
                     stockCategoryStats[stockCategory].holding += nVol;
-                    stockCategoryStats[stockCategory].diff += dates.length >= 2 ? diffVol : 0;
+                    stockCategoryStats[stockCategory].diff += oldIndex >= 0 ? diffVol : 0;
                     if (lRow) stockCategoryStats[stockCategory].etfs += 1;
                 }
 
@@ -2684,7 +2813,7 @@ def main():
                     });
                 }
 
-                if (dates.length >= 2) {
+                if (oldIndex >= 0) {
                     totalVolDiff += diffVol;
                 }
 
