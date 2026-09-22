@@ -1,12 +1,12 @@
 import os
 import re
 import json
-import base64
 import requests
 import gspread
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -199,6 +199,15 @@ def fetch_etf_name_mapping():
 # ==========================================
 @st.cache_data(ttl=3600)  
 def fetch_valuation_weights_cached(stock_codes, date_str):
+    valid_stocks = []
+    for code in stock_codes:
+        clean_code = str(code).strip()
+        if re.match(r"^\d{4,6}$", clean_code):
+            valid_stocks.append(clean_code)
+            
+    if not valid_stocks:
+        return {}
+
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         start_dt = dt - timedelta(days=7)
@@ -206,35 +215,33 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     except Exception:
         start_date_str = date_str
 
-    # 使用一次批次請求，避免每檔股票逐一呼叫 API 造成頁面無限載入。
-    url = "https://api.finmindtrade.com/api/v4/data"
-    params = {
-        "dataset": "TaiwanStockPER",
-        "start_date": start_date_str,
-        "end_date": date_str,
-    }
-    if FINMIND_TOKEN:
-        params["token"] = FINMIND_TOKEN
-
-    try:
-        response = requests.get(url, params=params, timeout=20)
-        response.raise_for_status()
-        records = response.json().get("data", [])
-        requested = {str(code).strip() for code in stock_codes}
-        result = {}
-        for record in records:
-            code = str(record.get("stock_id", record.get("data_id", ""))).strip()
-            if code not in requested:
-                continue
-            result[code] = {
-                "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
-                "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
-            }
-        return result
-    except Exception as exc:
-        # 估值是輔助資訊，API 失敗時不可阻塞主畫面。
-        print(f"FinMind 批次估值讀取略過：{exc}")
-        return {}
+    valuation_results = {}
+    
+    for code in valid_stocks:
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset": "TaiwanStockPER",  
+            "data_id": code,
+            "start_date": start_date_str,
+            "end_date": date_str,
+        }
+        if FINMIND_TOKEN:
+            params["token"] = FINMIND_TOKEN
+            
+        try:
+            res = requests.get(url, params=params, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                if data:
+                    last_record = data[-1]
+                    valuation_results[code] = {
+                        "pbr": float(last_record.get("PBR", last_record.get("pbr", 0.0)) or 0.0),
+                        "per": float(last_record.get("PER", last_record.get("per", 0.0)) or 0.0)
+                    }
+        except Exception as e:
+            print(f"FinMind API 連線失敗 ({code}): {e}")
+            
+    return valuation_results
 
 # ==========================================
 # 4. 外部即時行情 API 整合
@@ -1795,7 +1802,7 @@ def main():
             if (!table) return;
             const rows = Array.from(table.querySelectorAll('tr'));
             const csv = rows.map(row => Array.from(row.cells).map(cell => {
-                const text = cell.innerText.replace(/\\s+/g, ' ').trim().replace(/"/g, '""');
+                const text = cell.innerText.replace(/\s+/g, ' ').trim().replace(/"/g, '""');
                 return `"${text}"`;
             }).join(',')).join('\n');
             const blob = new Blob(["\uFEFF" + csv], {type: 'text/csv;charset=utf-8;'});
@@ -3318,14 +3325,7 @@ def main():
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
 
-    # 以 data URL 載入完整 HTML，取代已淘汰的 st.components.v1.html。
-    # 使用 base64 可避免 HTML、中文與 JavaScript 特殊字元破壞 iframe URL。
-    iframe_src = "data:text/html;base64," + base64.b64encode(
-        html_template.encode("utf-8")
-    ).decode("ascii")
-    # 部分 Streamlit Cloud 版本的 st.iframe 不接受 scrolling 參數；
-    # HTML 內部本身已設定版面與捲動，不需要再傳入該參數。
-    st.iframe(iframe_src, height=1200)
+    components.html(html_template, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()
