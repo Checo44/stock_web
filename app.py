@@ -786,6 +786,9 @@ def main():
             <button class="nav-link active" id="tab-home" onclick="switchTab('content-home', 'tab-home')"><i class="bi bi-house-door-fill me-2"></i>首頁</button>
           </li>
           <li class="nav-item">
+            <button class="nav-link" id="tab-h" onclick="switchTab('content-h', 'tab-h')"><i class="bi bi-diagram-3-fill me-2 text-success"></i>跨類別關聯分析</button>
+          </li>
+          <li class="nav-item">
             <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-radar text-info me-2"></i>主動型經理人共識雷達</button>
           </li>
           <li class="nav-item">
@@ -841,6 +844,51 @@ def main():
                   </thead>
                   <tbody id="homeTableBody"></tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 跨類別關聯分析 Tab -->
+          <div class="custom-tab-content" id="content-h">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-diagram-3-fill text-success me-2"></i>跨類別共同持股關聯</h4>
+                  <div class="small text-muted">依各 ETF 最新資料日期統計，找出同時被不同類別 ETF 持有的成分股。</div>
+                </div>
+                <select id="relationCategoryFilter" class="form-select form-select-sm" style="max-width: 180px;" onchange="renderRelationAnalysis()">
+                  <option value="all">全部分類</option>
+                  <option value="主動型">主動型</option>
+                  <option value="高息型">高息型</option>
+                  <option value="主題型">主題型</option>
+                  <option value="海外型">海外型</option>
+                  <option value="市值型">市值型</option>
+                </select>
+              </div>
+            </div>
+            <div class="row g-3 mb-4" id="relationKpiCards"></div>
+            <div class="row g-4">
+              <div class="col-lg-8">
+                <div class="card h-100">
+                  <div class="card-header bg-white text-success"><i class="bi bi-fire me-2"></i>跨類別共同持股熱點</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                      <thead><tr><th>股票</th><th>涵蓋類別</th><th>ETF 家數</th><th class="text-end">合計權重</th><th>出現類別</th></tr></thead>
+                      <tbody id="relationHotspotBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="card h-100">
+                  <div class="card-header bg-white text-primary"><i class="bi bi-clipboard-data me-2"></i>分類資料完整度</div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                      <thead><tr><th>分類</th><th class="text-end">ETF</th><th class="text-end">平均成分股</th><th>最新日</th></tr></thead>
+                      <tbody id="relationCoverageBody"></tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -993,6 +1041,18 @@ def main():
                     <div class="meta-card" style="border-left-color: #805ad5;">
                       <div class="meta-label">台股加權平均股淨比</div>
                       <div class="meta-value text-purple" id="metaWeightedPbr">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #d53f8c;">
+                      <div class="meta-label">前十大持股權重</div>
+                      <div class="meta-value" id="metaTop10Weight">-</div>
+                    </div>
+                  </div>
+                  <div class="col-6 col-md">
+                    <div class="meta-card" style="border-left-color: #718096;">
+                      <div class="meta-label">有效成分股數</div>
+                      <div class="meta-value" id="metaHoldingCount">-</div>
                     </div>
                   </div>
                 </div>
@@ -1165,6 +1225,7 @@ def main():
             </div>
             
             <div id="stockResultContainer" style="display: none;">
+              <div class="row g-3 mb-4" id="stockCategorySummary"></div>
               <div class="row g-4">
                 <div class="col-md-4">
                   <div class="card p-4 text-center mb-4">
@@ -1293,6 +1354,7 @@ def main():
                 </div>
               </div>
             </div>
+            <div class="row g-3 mb-4" id="globalChangeSummary"></div>
             
             <div class="row g-4">
               <div class="col-md-6">
@@ -1345,6 +1407,7 @@ def main():
                 </div>
               </div>
             </div>
+            <div class="row g-3 mb-4" id="heatSummary"></div>
 
             <ul class="nav nav-pills mb-4" id="heatTypeTabs" role="tablist">
               <li class="nav-item" role="presentation">
@@ -1483,6 +1546,7 @@ def main():
                 </div>
                 <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer"></div>
             </div>
+            <div class="row g-3 mb-4" id="compareSelectionSummary"></div>
             
             <div id="compareSummarySection" style="display: none;" class="mb-4">
               <div class="fw-bold text-secondary mb-2"><i class="bi bi-lightning-charge-fill text-warning me-1"></i>交叉比對核心摘要（Top 3 重疊焦點個股）</div>
@@ -1641,6 +1705,8 @@ def main():
 
             if (contentId === 'content-g') {
                 calculateRadarConsensus();
+            } else if (contentId === 'content-h') {
+                renderRelationAnalysis();
             } else if (contentId === 'content-c') {
                 loadGlobalChanges();
             } else if (contentId === 'content-d') {
@@ -1828,6 +1894,79 @@ def main():
                 </div>`;
             }).join('');
             document.getElementById('categorySummary').innerHTML = html;
+        }
+
+        function renderRelationAnalysis() {
+            const selectedCategory = document.getElementById('relationCategoryFilter').value;
+            const allCodes = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))]);
+            const selectedCodes = allCodes.filter(code => selectedCategory === 'all' || getEtfCategory(code) === selectedCategory);
+            const stockMap = {};
+            const coverage = {};
+            CATEGORY_ORDER.forEach(category => {
+                coverage[category] = { etfs: 0, holdings: 0, dates: [] };
+            });
+
+            selectedCodes.forEach(code => {
+                const category = getEtfCategory(code);
+                const data = globalRawData.filter(row => row.etf === code);
+                const dates = [...new Set(data.map(row => row.date))].sort((a, b) => new Date(a) - new Date(b));
+                if (!dates.length || !coverage[category]) return;
+                const latestDate = dates[dates.length - 1];
+                const latestRows = data.filter(row => row.date === latestDate && isNormalStock(row.stock, row.name));
+                coverage[category].etfs += 1;
+                coverage[category].holdings += latestRows.length;
+                coverage[category].dates.push(latestDate);
+
+                latestRows.forEach(row => {
+                    if (!stockMap[row.stock]) {
+                        stockMap[row.stock] = {
+                            code: row.stock,
+                            name: row.name || row.stock,
+                            etfs: new Set(),
+                            categories: new Set(),
+                            totalWeight: 0
+                        };
+                    }
+                    stockMap[row.stock].etfs.add(code);
+                    stockMap[row.stock].categories.add(category);
+                    stockMap[row.stock].totalWeight += toNumber(row.weight);
+                });
+            });
+
+            const allStocks = Object.values(stockMap);
+            const crossCategoryStocks = allStocks.filter(item => item.categories.size >= 2);
+            const latestDate = selectedCodes.length
+                ? [...new Set(globalRawData.filter(row => selectedCodes.includes(row.etf)).map(row => row.date))].sort().pop() || '-'
+                : '-';
+
+            document.getElementById('relationKpiCards').innerHTML = [
+                ['納入 ETF', selectedCodes.length, '檔', 'text-primary'],
+                ['最新成分股', allStocks.length, '檔', 'text-success'],
+                ['跨類別共同持股', crossCategoryStocks.length, '檔', 'text-danger'],
+                ['最新資料日期', latestDate, '', 'text-secondary']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
+
+            const hotspotHtml = crossCategoryStocks
+                .sort((a, b) => b.categories.size - a.categories.size || b.etfs.size - a.etfs.size || b.totalWeight - a.totalWeight)
+                .slice(0, 30)
+                .map(item => `<tr>
+                    <td class="fw-bold">${item.code} <span class="text-muted small">${item.name}</span></td>
+                    <td>${item.categories.size} 類</td>
+                    <td>${item.etfs.size} 檔</td>
+                    <td class="text-end">${item.totalWeight.toFixed(2)}%</td>
+                    <td>${[...item.categories].map(categoryBadgeHtml).join(' ')}</td>
+                </tr>`).join('');
+            document.getElementById('relationHotspotBody').innerHTML = hotspotHtml || '<tr><td colspan="5" class="text-center text-muted">目前沒有跨類別共同持股資料</td></tr>';
+
+            const coverageHtml = CATEGORY_ORDER
+                .filter(category => selectedCategory === 'all' || selectedCategory === category)
+                .map(category => {
+                    const item = coverage[category];
+                    const average = item.etfs ? (item.holdings / item.etfs).toFixed(1) : '0.0';
+                    const newest = item.dates.sort().pop() || '-';
+                    return `<tr><td>${categoryBadgeHtml(category)}</td><td class="text-end">${item.etfs}</td><td class="text-end">${average}</td><td>${newest}</td></tr>`;
+                }).join('');
+            document.getElementById('relationCoverageBody').innerHTML = coverageHtml || '<tr><td colspan="4" class="text-center text-muted">無資料</td></tr>';
         }
 
         function filterEtfListByCategory() {
@@ -2039,6 +2178,9 @@ def main():
 
             document.getElementById('metaWeightedPer').innerText = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
             document.getElementById('metaWeightedPbr').innerText = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
+            const top10Weight = stocks.slice(0, 10).reduce((sum, row) => sum + toNumber(row.weight), 0);
+            document.getElementById('metaTop10Weight').innerText = `${top10Weight.toFixed(2)}%`;
+            document.getElementById('metaHoldingCount').innerText = stocks.length.toLocaleString();
 
             renderIndustryPieChart(stocks);
             refreshEtfChanges(etfCode, dates);
@@ -2506,6 +2648,10 @@ def main():
             let changedHolders = [];
             let totalVolDiff = 0;
             let totalHoldingVol = 0;
+            const stockCategoryStats = {};
+            CATEGORY_ORDER.forEach(category => {
+                stockCategoryStats[category] = { holding: 0, diff: 0, etfs: 0 };
+            });
 
             etfSet.forEach(eCode => {
                 let eData = globalRawData.filter(d => d.etf === eCode);
@@ -2521,6 +2667,12 @@ def main():
                 let nVol = lRow ? toNumber(lRow.volume) : 0;
                 let diffVol = nVol - oVol;
                 totalHoldingVol += nVol;
+                const stockCategory = getEtfCategory(eCode);
+                if (stockCategoryStats[stockCategory]) {
+                    stockCategoryStats[stockCategory].holding += nVol;
+                    stockCategoryStats[stockCategory].diff += dates.length >= 2 ? diffVol : 0;
+                    if (lRow) stockCategoryStats[stockCategory].etfs += 1;
+                }
 
                 if (lRow) {
                     latestHolders.push({
@@ -2560,6 +2712,17 @@ def main():
 
             latestHolders.sort((a,b) => b.weight - a.weight);
             changedHolders.sort((a,b) => Math.abs(b.diffVol) - Math.abs(a.diffVol));
+
+            document.getElementById('stockCategorySummary').innerHTML = CATEGORY_ORDER.map(category => {
+                const item = stockCategoryStats[category];
+                const diffText = item.diff > 0 ? `+${item.diff.toLocaleString()}` : item.diff.toLocaleString();
+                const diffClass = item.diff > 0 ? 'text-danger' : (item.diff < 0 ? 'text-success' : 'text-muted');
+                return `<div class="col-6 col-xl-4"><div class="card p-3 h-100">
+                    <div class="d-flex justify-content-between align-items-center">${categoryBadgeHtml(category)}<span class="small text-muted">${item.etfs} 檔持有</span></div>
+                    <div class="small text-muted mt-2">分類合計持有：<b>${item.holding.toLocaleString()}</b></div>
+                    <div class="small text-muted">前一交易日變化：<b class="${diffClass}">${diffText}</b></div>
+                </div></div>`;
+            }).join('');
 
             let totalVolStr = totalVolDiff > 0 ? `+${totalVolDiff.toLocaleString()} 股` : `${totalVolDiff.toLocaleString()} 股`;
             document.getElementById('trendStockTotalVol').innerText = totalVolStr;
@@ -2759,6 +2922,13 @@ def main():
 
             document.getElementById('globalNewBody').innerHTML = newHtml || '<tr><td colspan="2" class="text-center text-muted">無新增成分股紀錄</td></tr>';
             document.getElementById('globalDelBody').innerHTML = delHtml || '<tr><td colspan="2" class="text-center text-muted">無剔除成分股紀錄</td></tr>';
+            const newEventCount = Object.values(newAddedMap).reduce((sum, items) => sum + items.length, 0);
+            const delEventCount = Object.values(deletedMap).reduce((sum, items) => sum + items.length, 0);
+            document.getElementById('globalChangeSummary').innerHTML = `
+                <div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">主動型 ETF 樣本</div><div class="meta-value">${etfSet.length} 檔</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#dc2626;"><div class="meta-label">新增成分股事件</div><div class="meta-value text-danger">${newEventCount.toLocaleString()}</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#64748b;"><div class="meta-label">剔除成分股事件</div><div class="meta-value text-secondary">${delEventCount.toLocaleString()}</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#7c3aed;"><div class="meta-label">受影響個股種類</div><div class="meta-value">${new Set([...Object.keys(newAddedMap), ...Object.keys(deletedMap)]).size.toLocaleString()}</div></div></div>`;
         }
 
         function toggleHeatCustomDates() {
@@ -2875,6 +3045,15 @@ def main():
             document.getElementById('heatSellVolBodyDom').innerHTML = renderHeatTable(domSellVol, true, true);
             document.getElementById('heatBuyVolBodyFor').innerHTML = renderHeatTable(forBuyVol, true, false);
             document.getElementById('heatSellVolBodyFor').innerHTML = renderHeatTable(forSellVol, true, true);
+            const buyStocks = statsArr.filter(item => item.diffVol > 0).length;
+            const sellStocks = statsArr.filter(item => item.diffVol < 0).length;
+            const netVolume = statsArr.reduce((sum, item) => sum + item.diffVol, 0);
+            const netAmount = statsArr.reduce((sum, item) => sum + (item.estAmount || 0), 0);
+            document.getElementById('heatSummary').innerHTML = `
+                <div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">主動型異動個股</div><div class="meta-value">${statsArr.length.toLocaleString()}</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#dc2626;"><div class="meta-label">淨增加個股</div><div class="meta-value text-danger">${buyStocks}</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#16a34a;"><div class="meta-label">淨減少個股</div><div class="meta-value text-success">${sellStocks}</div></div></div>
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#7c3aed;"><div class="meta-label">估算淨金額</div><div class="meta-value">${(netAmount / 100000000).toFixed(2)} 億</div><div class="small text-muted">淨數量 ${netVolume.toLocaleString()}</div></div></div>`;
         }
 
         function renderCompareMatrix() {
@@ -2890,6 +3069,7 @@ def main():
                 summarySec.style.display = 'none';
                 coreCard.style.display = 'none';
                 uniqueCard.style.display = 'none';
+                document.getElementById('compareSelectionSummary').innerHTML = '';
                 return;
             }
 
@@ -2923,6 +3103,23 @@ def main():
 
             let totalSelected = checkedEtfs.length;
             let allStocks = Object.values(stockMap);
+
+            const selectedCategoryCount = {};
+            checkedEtfs.forEach(code => {
+                const category = getEtfCategory(code);
+                selectedCategoryCount[category] = (selectedCategoryCount[category] || 0) + 1;
+            });
+            const categorySummaryText = Object.entries(selectedCategoryCount)
+                .map(([category, count]) => `${categoryBadgeHtml(category)} ${count} 檔`)
+                .join('　');
+            document.getElementById('compareSelectionSummary').innerHTML = `
+                <div class="col-12"><div class="card p-3">
+                    <div class="d-flex flex-wrap gap-3 align-items-center">
+                        <span class="fw-bold text-secondary">目前比較範圍：${totalSelected} 檔 ETF</span>
+                        <span class="text-muted">分類組成：${categorySummaryText}</span>
+                        <span class="text-muted">涵蓋不重複成分股：${allStocks.length} 檔</span>
+                    </div>
+                </div></div>`;
 
             allStocks.forEach(s => {
                 s.holdCount = Object.keys(s.etfWeights).length;
