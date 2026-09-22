@@ -58,7 +58,7 @@ ETF_CATEGORY_MAP = {
 # FinMind API 金鑰
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "") or st.secrets.get("GEMINI_API_KEY", "")
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -524,6 +524,10 @@ def build_gemini_summary(df):
         lines.append(f"比較日期：{previous_date} → {latest_date}")
         lines.append("主要加碼：" + "；".join(f"{idx[0]} {idx[1]} {int(value):,}股" for idx, value in buy.items()))
         lines.append("主要減碼：" + "；".join(f"{idx[0]} {idx[1]} {int(value):,}股" for idx, value in sell.items()))
+        latest_etf = latest.groupby("etf")["volume"].sum()
+        previous_etf = df[df["date"] == previous_date].groupby("etf")["volume"].sum()
+        etf_diff = latest_etf.subtract(previous_etf, fill_value=0).sort_values()
+        lines.append("ETF 持有量方向（減碼→加碼）：" + "；".join(f"{code} {int(value):+,}股" for code, value in pd.concat([etf_diff.head(6), etf_diff.tail(6)]).items()))
     etf_weight = latest.groupby("etf")["weight"].sum().sort_values(ascending=False).head(12)
     lines.append("資料中權重最高 ETF：" + "；".join(f"{code} {value:.2f}%" for code, value in etf_weight.items()))
     return "\n".join(lines)
@@ -875,7 +879,9 @@ def main():
             <button class="nav-link" id="tab-h" onclick="switchTab('content-h', 'tab-h')"><i class="bi bi-diagram-3-fill me-2 text-success"></i>跨類別關聯分析</button>
           </li>
           <li class="nav-item">
-            <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-radar text-info me-2"></i>主動型經理人共識雷達</button>
+            <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-shield-bar-chart-fill text-info me-2"></i>ETF 風險與集中度</button>
+            <button class="nav-link" id="tab-i" onclick="switchTab('content-i', 'tab-i')"><i class="bi bi-clipboard2-check text-warning me-2"></i>資料品質檢查</button>
+            <button class="nav-link" id="tab-j" onclick="switchTab('content-j', 'tab-j')"><i class="bi bi-diagram-2 text-success me-2"></i>成分股重疊排行</button>
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
@@ -1001,6 +1007,32 @@ def main():
 
           <!-- 主動型經理人共識雷達 Tab -->
           <div class="custom-tab-content" id="content-g">
+            <div id="riskPageIntro" class="card p-4 bg-light border-0 mb-4">
+              <h4 class="fw-bold text-dark mb-1"><i class="bi bi-shield-bar-chart-fill text-info me-2"></i>ETF 風險與集中度診斷</h4>
+              <div class="small text-muted">以最新持股資料衡量 ETF 的前十大集中度、成分股數量與產業分散程度，協助判斷組合風險。</div>
+            </div>
+            <div class="row g-3 mb-4" id="riskKpiCards"></div>
+            <div class="card p-3 mb-4" id="riskRankingCard">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="fw-bold text-secondary">集中度與分散度排行</span>
+                <select id="riskCategoryFilter" class="form-select form-select-sm" style="max-width: 180px;" onchange="renderRiskAnalysis()">
+                  <option value="all">全部分類</option>
+                  <option value="主動型">主動型</option><option value="高息型">高息型</option>
+                  <option value="主題型">主題型</option><option value="海外型">海外型</option><option value="市值型">市值型</option>
+                </select>
+              </div>
+              <div class="table-responsive" style="max-height: 620px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead><tr><th>ETF</th><th>分類</th><th class="text-end">有效成分股</th><th class="text-end">前十大權重</th><th class="text-end">前十大集中度</th><th>風險提示</th></tr></thead>
+                  <tbody id="riskRankingBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card p-3 mb-4 border-start border-primary border-4">
+              <div class="fw-bold text-primary mb-2">Gemini 風險解讀</div>
+              <div id="geminiRiskInsight" class="small text-secondary" style="white-space: pre-line;">分析載入中…</div>
+            </div>
+            <div id="legacyRadarPanel" style="display:none;">
             <div class="card p-3 mb-4 bg-light border">
               <div class="d-flex justify-content-between align-items-center mb-2">
                 <div class="fw-bold text-dark"><i class="bi bi-check2-square me-1"></i>選取欲納入共識雷達分析範疇的主動式 ETF（預設全不選）：</div>
@@ -1091,6 +1123,7 @@ def main():
                 </div>
               </div>
             </div>
+            </div>
           </div>
           
           <!-- 單檔 ETF 籌碼與持股 Tab -->
@@ -1123,7 +1156,10 @@ def main():
                 <div class="card p-3 mb-3">
                   <div class="row g-2 align-items-center">
                     <div class="col-md-5"><input id="holdingSearchInput" class="form-control" placeholder="搜尋成分股代號或名稱" oninput="renderStockTable()"></div>
-                    <div class="col-md-7 text-muted small" id="etfChangeSummary">選取 ETF 後顯示持股摘要</div>
+                    <div class="col-md-7 text-end">
+                      <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('stockTableBody', 'etf_holdings.csv')">下載成分股</button>
+                      <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('assetTableBody', 'etf_non_stock_assets.csv')">下載其他資產</button>
+                    </div>
                   </div>
                 </div>
                 
@@ -1170,6 +1206,10 @@ def main():
                       <div class="meta-value" id="metaHoldingCount">-</div>
                     </div>
                   </div>
+                </div>
+                <div class="card p-3 mb-4 border-start border-primary border-4">
+                  <div class="fw-bold text-primary mb-2">Gemini 單檔 ETF 分析</div>
+                  <div id="geminiEtfInsight" class="small text-secondary" style="white-space: pre-line;">分析載入中…</div>
                 </div>
 
                 <!-- 單檔經理人風格與持股診斷卡片 -->
@@ -1349,6 +1389,14 @@ def main():
             
             <div id="stockResultContainer" style="display: none;">
               <div class="row g-3 mb-4" id="stockCategorySummary"></div>
+              <div class="card p-3 mb-4 border-start border-success border-4">
+                <div class="fw-bold text-success mb-2">Gemini 個股籌碼方向分析</div>
+                <div id="geminiStockInsight" class="small text-secondary" style="white-space: pre-line;">分析載入中…</div>
+              </div>
+              <div class="card mb-4">
+                <div class="card-header text-success"><i class="bi bi-pie-chart me-2"></i>各分類合計持有比例（點擊圖例可篩選）</div>
+                <div class="card-body" style="position: relative; height: 280px;"><canvas id="stockCategoryPieChart"></canvas></div>
+              </div>
               <div class="row g-4">
                 <div class="col-md-4">
                   <div class="card p-4 text-center mb-4">
@@ -1377,7 +1425,7 @@ def main():
                   </div>
 
                   <div class="card">
-                    <div class="card-header text-dark"><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金對此股票之籌碼調整明細</div>
+                    <div class="card-header text-dark d-flex justify-content-between align-items-center"><span><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金對此股票之籌碼調整明細</span><button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('stockDistBody', 'stock_etf_changes.csv')">下載異動</button></div>
                     <div class="table-responsive">
                       <table class="table table-hover align-middle">
                         <thead>
@@ -1391,7 +1439,7 @@ def main():
                 
                 <div class="col-md-8">
                   <div class="card">
-                    <div class="card-header text-primary"><i class="bi bi-grid-3x3-gap-fill me-2"></i>該個股目前被哪些 ETF 所持有？（依持股權重排行）</div>
+                    <div class="card-header text-primary d-flex justify-content-between align-items-center"><span><i class="bi bi-grid-3x3-gap-fill me-2"></i>該個股目前被哪些 ETF 所持有？（依持股權重排行）</span><button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('stockDistBody2', 'stock_etf_holders.csv')">下載持有清單</button></div>
                     <div class="table-responsive">
                       <table class="table align-middle">
                         <thead>
@@ -1676,6 +1724,7 @@ def main():
                 <div class="mt-2 text-end">
                   <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareCoreTableBody', 'etf_compare_core.csv')">下載共同核心 CSV</button>
                   <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareUniqueTableBody', 'etf_compare_unique.csv')">下載差異持股 CSV</button>
+                  <button class="btn btn-outline-primary btn-sm" onclick="downloadCompareAllCsv()">下載全部持股 CSV</button>
                 </div>
             </div>
             <div class="row g-3 mb-4" id="compareSelectionSummary"></div>
@@ -1712,6 +1761,38 @@ def main():
             <div class="card p-5 text-center text-muted" id="comparePlaceholder">
               <i class="bi bi-grid-3x3-gap mb-3" style="font-size: 3rem;"></i>
               <div>請在上方勾選至少一檔以上的 ETF 基金開始進行多方橫向對照。</div>
+            </div>
+          </div>
+
+          <div class="custom-tab-content" id="content-i">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <h4 class="fw-bold text-dark mb-1"><i class="bi bi-clipboard2-check text-warning me-2"></i>資料品質檢查</h4>
+              <div class="small text-muted">檢查每檔 ETF 的最新日期、成分股數、權重合計與可比較交易日，快速找出需要補資料的項目。</div>
+            </div>
+            <div class="row g-3 mb-4" id="qualityKpiCards"></div>
+            <div class="card p-3">
+              <div class="table-responsive" style="max-height: 650px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead><tr><th>ETF</th><th>分類</th><th>最新日期</th><th class="text-end">成分股數</th><th class="text-end">權重合計</th><th>資料狀態</th></tr></thead>
+                  <tbody id="qualityTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="custom-tab-content" id="content-j">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <h4 class="fw-bold text-dark mb-1"><i class="bi bi-diagram-2 text-success me-2"></i>成分股重疊排行</h4>
+              <div class="small text-muted">以最新資料統計被最多 ETF 持有的個股，並同時呈現涵蓋分類數與平均權重。</div>
+            </div>
+            <div class="row g-3 mb-4" id="overlapKpiCards"></div>
+            <div class="card p-3">
+              <div class="table-responsive" style="max-height: 650px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead><tr><th>排行</th><th>股票</th><th class="text-end">持有 ETF 數</th><th class="text-end">涵蓋分類數</th><th class="text-end">平均權重</th><th>分類</th></tr></thead>
+                  <tbody id="overlapTableBody"></tbody>
+                </table>
+              </div>
             </div>
           </div>
 
@@ -1820,6 +1901,7 @@ def main():
         let currentEtfStocks = [];       
         let selectedIndustries = [];     
         let industryChartInstance = null; 
+        let stockCategoryChartInstance = null;
 
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
@@ -1837,14 +1919,94 @@ def main():
             document.getElementById(tabId).classList.add('active');
 
             if (contentId === 'content-g') {
-                calculateRadarConsensus();
+                renderRiskAnalysis();
             } else if (contentId === 'content-h') {
                 renderRelationAnalysis();
+            } else if (contentId === 'content-i') {
+                renderQualityAnalysis();
+            } else if (contentId === 'content-j') {
+                renderOverlapAnalysis();
             } else if (contentId === 'content-c') {
                 loadGlobalChanges();
             } else if (contentId === 'content-d') {
                 loadMarketHeat();
             }
+        }
+
+        function latestEtfSnapshot(etfCode) {
+            const rows = globalRawData.filter(row => row.etf === etfCode);
+            const dates = [...new Set(rows.map(row => row.date))].sort((a, b) => new Date(a) - new Date(b));
+            const latestDate = dates[dates.length - 1];
+            return {rows: rows.filter(row => row.date === latestDate && isNormalStock(row.stock, row.name)), dates, latestDate};
+        }
+
+        function renderRiskAnalysis() {
+            const selected = document.getElementById('riskCategoryFilter')?.value || 'all';
+            const etfs = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))])
+                .filter(code => selected === 'all' || getEtfCategory(code) === selected);
+            const stats = etfs.map(code => {
+                const snapshot = latestEtfSnapshot(code);
+                const weights = snapshot.rows.map(row => toNumber(row.weight)).sort((a, b) => b - a);
+                const top10 = weights.slice(0, 10).reduce((sum, value) => sum + value, 0);
+                const hhi = weights.reduce((sum, value) => sum + Math.pow(value / 100, 2), 0);
+                const risk = top10 >= 50 ? '集中度高' : (top10 >= 35 ? '中度集中' : '相對分散');
+                return {code, category: getEtfCategory(code), count: weights.length, top10, hhi, risk, date: snapshot.latestDate || '-'};
+            });
+            const highRisk = stats.filter(item => item.top10 >= 50).length;
+            const averageTop10 = stats.length ? stats.reduce((sum, item) => sum + item.top10, 0) / stats.length : 0;
+            const averageHhi = stats.length ? stats.reduce((sum, item) => sum + item.hhi, 0) / stats.length : 0;
+            document.getElementById('riskKpiCards').innerHTML = [
+                ['分析 ETF', stats.length, '檔', 'text-primary'],
+                ['平均前十大權重', `${averageTop10.toFixed(2)}%`, '', 'text-info'],
+                ['高集中度 ETF', highRisk, '檔', 'text-danger'],
+                ['平均 HHI', averageHhi.toFixed(4), '集中度指標', 'text-secondary']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
+            document.getElementById('riskRankingBody').innerHTML = stats.sort((a, b) => b.top10 - a.top10).map(item => `<tr>
+                <td class="font-monospace fw-bold">${item.code} <span class="text-muted small">${getEtfName(item.code)}</span></td>
+                <td>${categoryBadgeHtml(item.category)}</td><td class="text-end">${item.count}</td>
+                <td class="text-end">${item.top10.toFixed(2)}%</td><td class="text-end">${(item.top10 / 10).toFixed(2)}%</td>
+                <td class="${item.top10 >= 50 ? 'text-danger' : 'text-secondary'}">${item.risk}</td>
+            </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted">無資料</td></tr>';
+            const riskBox = document.getElementById('geminiRiskInsight');
+            if (riskBox) riskBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
+        }
+
+        function renderQualityAnalysis() {
+            const etfs = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))]);
+            let usable = 0, warning = 0, latestDates = new Set();
+            const rows = etfs.map(code => {
+                const snapshot = latestEtfSnapshot(code);
+                const totalWeight = snapshot.rows.reduce((sum, row) => sum + toNumber(row.weight), 0);
+                snapshot.dates.forEach(date => latestDates.add(date));
+                const ok = snapshot.dates.length >= 2 && totalWeight > 85 && totalWeight <= 105;
+                if (ok) usable += 1; else warning += 1;
+                return `<tr><td class="font-monospace fw-bold">${code}</td><td>${categoryBadgeHtml(getEtfCategory(code))}</td><td>${snapshot.latestDate || '-'}</td><td class="text-end">${snapshot.rows.length}</td><td class="text-end">${totalWeight.toFixed(2)}%</td><td class="${ok ? 'text-success' : 'text-warning'}">${ok ? '可比較' : (snapshot.dates.length < 2 ? '交易日不足' : '權重需檢查')}</td></tr>`;
+            });
+            document.getElementById('qualityKpiCards').innerHTML = [
+                ['ETF 總數', etfs.length, '檔', 'text-primary'], ['可比較', usable, '檔', 'text-success'],
+                ['需檢查', warning, '檔', 'text-warning'], ['資料日期數', latestDates.size, '日', 'text-secondary']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
+            document.getElementById('qualityTableBody').innerHTML = rows.join('') || '<tr><td colspan="6" class="text-center text-muted">無資料</td></tr>';
+        }
+
+        function renderOverlapAnalysis() {
+            const map = {};
+            const etfs = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))]);
+            etfs.forEach(code => {
+                const snapshot = latestEtfSnapshot(code);
+                snapshot.rows.forEach(row => {
+                    if (!map[row.stock]) map[row.stock] = {code: row.stock, name: row.name || row.stock, etfs: new Set(), categories: new Set(), weights: []};
+                    map[row.stock].etfs.add(code); map[row.stock].categories.add(getEtfCategory(code)); map[row.stock].weights.push(toNumber(row.weight));
+                });
+            });
+            const stocks = Object.values(map).sort((a, b) => b.etfs.size - a.etfs.size || b.categories.size - a.categories.size).slice(0, 100);
+            document.getElementById('overlapKpiCards').innerHTML = [
+                ['重疊個股', Object.keys(map).length, '檔', 'text-primary'],
+                ['最大涵蓋 ETF', stocks[0]?.etfs.size || 0, '檔', 'text-danger'],
+                ['跨分類個股', Object.values(map).filter(item => item.categories.size > 1).length, '檔', 'text-success'],
+                ['排行上限', stocks.length, '檔', 'text-secondary']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
+            document.getElementById('overlapTableBody').innerHTML = stocks.map((item, index) => `<tr><td>${index + 1}</td><td class="fw-bold">${item.code} <span class="text-muted small">${item.name}</span></td><td class="text-end">${item.etfs.size}</td><td class="text-end">${item.categories.size}</td><td class="text-end">${(item.weights.reduce((a, b) => a + b, 0) / item.weights.length).toFixed(2)}%</td><td>${[...item.categories].map(categoryBadgeHtml).join(' ')}</td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted">無資料</td></tr>';
         }
 
         function isNormalStock(code, name) {
@@ -1890,6 +2052,22 @@ def main():
             link.click();
             link.remove();
             URL.revokeObjectURL(url);
+        }
+
+        function downloadCompareAllCsv() {
+            const coreRows = Array.from(document.querySelectorAll('#compareCoreTableBody tr'));
+            const uniqueRows = Array.from(document.querySelectorAll('#compareUniqueTableBody tr'));
+            const headerCells = Array.from(document.querySelectorAll('#compareCoreTableHeader th')).map(cell => cell.innerText.trim());
+            const rows = [['區分', ...headerCells]];
+            coreRows.forEach(row => rows.push(['共同核心', ...Array.from(row.cells).map(cell => cell.innerText.trim())]));
+            uniqueRows.forEach(row => rows.push(['差異持股', ...Array.from(row.cells).map(cell => cell.innerText.trim())]));
+            if (rows.length === 1) return;
+            const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\\n');
+            const blob = new Blob(["\\uFEFF" + csv], {type: 'text/csv;charset=utf-8;'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url; link.download = 'etf_compare_all_holdings.csv';
+            document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
         }
 
         function initDashboard() {
@@ -1972,6 +2150,10 @@ def main():
             document.getElementById('homeTableBody').innerHTML = homeHtml;
             const geminiBox = document.getElementById('geminiInsightText');
             if (geminiBox) geminiBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
+            const geminiEtfBox = document.getElementById('geminiEtfInsight');
+            if (geminiEtfBox) geminiEtfBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
+            const geminiStockBox = document.getElementById('geminiStockInsight');
+            if (geminiStockBox) geminiStockBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
             renderCategorySummary();
             applyHomeFilters();
 
@@ -2395,14 +2577,6 @@ def main():
             const previousMap = new Map(previousRows.map(row => [row.stock, `${row.weight}|${row.volume}`]));
             const changedCount = stocks.filter(row => previousMap.get(row.stock) !== `${row.weight}|${row.volume}`).length
                 + previousRows.filter(row => !stocks.some(current => current.stock === row.stock)).length;
-            const weightDiff = currentWeight - previousWeight;
-            const weightDiffText = previousDate && previousRows.length
-                ? `${weightDiff >= 0 ? '+' : ''}${weightDiff.toFixed(2)} 個百分點`
-                : '無可比基準';
-            document.getElementById('etfChangeSummary').innerText = previousDate
-                ? `目前持股權重合計 ${currentWeight.toFixed(2)}%｜前一交易日 ${previousDate}｜權重變化 ${weightDiffText}｜成分股異動 ${changedCount} 檔`
-                : `目前只有 ${latestDate} 資料，尚無前一交易日可比較`;
-
             renderIndustryPieChart(stocks);
             refreshEtfChanges(etfCode, dates);
         }
@@ -2477,7 +2651,31 @@ def main():
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                boxWidth: 12,
+                                font: { size: 11 },
+                                generateLabels: function(chart) {
+                                    const dataset = chart.data.datasets[0];
+                                    return chart.data.labels.map((label, index) => ({
+                                        text: `${label} (${Number(dataset.data[index] || 0).toFixed(2)}%)`,
+                                        fillStyle: dataset.backgroundColor[index],
+                                        strokeStyle: dataset.backgroundColor[index],
+                                        lineWidth: 1,
+                                        hidden: !chart.getDataVisibility(index),
+                                        index: index
+                                    }));
+                                }
+                            },
+                            onClick: function(event, legendItem, legend) {
+                                const clickedIndustry = legend.chart.data.labels[legendItem.index];
+                                const pos = selectedIndustries.indexOf(clickedIndustry);
+                                if (pos > -1) selectedIndustries.splice(pos, 1);
+                                else selectedIndustries.push(clickedIndustry);
+                                renderStockTable();
+                            }
+                        },
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
@@ -2499,6 +2697,29 @@ def main():
                             renderStockTable();
                         }
                     }
+                }
+            });
+        }
+
+        function renderStockCategoryPieChart(categoryStats) {
+            const canvas = document.getElementById('stockCategoryPieChart');
+            if (!canvas) return;
+            const labels = CATEGORY_ORDER.filter(category => categoryStats[category]?.holding > 0);
+            const values = labels.map(category => categoryStats[category].holding);
+            if (stockCategoryChartInstance) stockCategoryChartInstance.destroy();
+            stockCategoryChartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'pie',
+                data: {labels, datasets: [{data: values, backgroundColor: ['#c2410c', '#15803d', '#7e22ce', '#1d4ed8', '#0e7490']}]},
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {legend: {position: 'right', labels: {generateLabels: chart => chart.data.labels.map((label, index) => ({
+                        text: `${label} (${Number(chart.data.datasets[0].data[index] || 0).toLocaleString()} 股)`,
+                        fillStyle: chart.data.datasets[0].backgroundColor[index], index
+                    }))}, onClick: (event, item, legend) => {
+                        const selected = legend.chart.data.labels[item.index];
+                        document.getElementById('stockCategoryFilter').value = selected;
+                        filterStockDistributionByCategory();
+                    }}}
                 }
             });
         }
@@ -2950,6 +3171,7 @@ def main():
                     <div class="small text-muted">前一交易日變化：<b class="${diffClass}">${diffText}</b></div>
                 </div></div>`;
             }).join('');
+            renderStockCategoryPieChart(stockCategoryStats);
 
             let totalVolStr = totalVolDiff > 0 ? `+${totalVolDiff.toLocaleString()} 股` : `${totalVolDiff.toLocaleString()} 股`;
             document.getElementById('trendStockTotalVol').innerText = totalVolStr;
