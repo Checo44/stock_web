@@ -3323,7 +3323,9 @@ def main():
     iframe_src = "data:text/html;base64," + base64.b64encode(
         html_template.encode("utf-8")
     ).decode("ascii")
-    st.iframe(iframe_src, height=1200, scrolling=True)
+    # 部分 Streamlit Cloud 版本的 st.iframe 不接受 scrolling 參數；
+    # HTML 內部本身已設定版面與捲動，不需要再傳入該參數。
+    st.iframe(iframe_src, height=1200)
 
 if __name__ == "__main__":
     main()
