@@ -2521,7 +2521,7 @@ def main():
                     return; // 無變動不列入
                 }
 
-                let isDom = /^\d{4,6}$/.test(sCode.trim());
+                let isDom = /^\\d{4,6}$/.test(sCode.trim());
                 let unit = isDom ? "張" : "股";
 
                 // 計算經理人連續操作動向
@@ -3074,7 +3074,7 @@ def main():
                 if (!sample || !isNormalStock(sample.stock, sample.name)) return;
 
                 let sName = sample.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
-                let isDomestic = /^\d{4,6}$/.test(sCode.trim());
+                let isDomestic = /^\\d{4,6}$/.test(sCode.trim());
 
                 let oldVolSum = activeOldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
                 let newVolSum = activeNewRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
