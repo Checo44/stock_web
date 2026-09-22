@@ -1,12 +1,12 @@
 import os
 import re
 import json
+import base64
 import requests
 import gspread
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -1795,7 +1795,7 @@ def main():
             if (!table) return;
             const rows = Array.from(table.querySelectorAll('tr'));
             const csv = rows.map(row => Array.from(row.cells).map(cell => {
-                const text = cell.innerText.replace(/\s+/g, ' ').trim().replace(/"/g, '""');
+                const text = cell.innerText.replace(/\\s+/g, ' ').trim().replace(/"/g, '""');
                 return `"${text}"`;
             }).join(',')).join('\n');
             const blob = new Blob(["\uFEFF" + csv], {type: 'text/csv;charset=utf-8;'});
@@ -3318,7 +3318,12 @@ def main():
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
 
-    components.html(html_template, height=1200, scrolling=True)
+    # 以 data URL 載入完整 HTML，取代已淘汰的 st.components.v1.html。
+    # 使用 base64 可避免 HTML、中文與 JavaScript 特殊字元破壞 iframe URL。
+    iframe_src = "data:text/html;base64," + base64.b64encode(
+        html_template.encode("utf-8")
+    ).decode("ascii")
+    st.iframe(iframe_src, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()
