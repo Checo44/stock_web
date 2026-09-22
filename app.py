@@ -101,8 +101,17 @@ def _normalise_etf_code(value):
     )
     if text.endswith(".0") and text[:-2].isdigit():
         text = text[:-2]
-    if text.isdigit() and len(text) < 4:
-        return text.zfill(4)
+    if text.isdigit():
+        # 依分類清單找回被 Google Sheets 去掉的前導零。
+        # 例如 639 -> 00639、50 -> 0050，而不是錯誤補成 0639。
+        numeric_matches = [
+            code for code in ETF_CATEGORY_MAP
+            if code.isdigit() and int(code) == int(text)
+        ]
+        if len(numeric_matches) == 1:
+            return numeric_matches[0]
+        if len(text) < 4:
+            return text.zfill(4)
     return text
 
 @st.cache_data(ttl=300)
@@ -806,7 +815,6 @@ def main():
                     <tr>
                       <th>ETF代號</th>
                       <th>ETF名稱</th>
-                      <th>分類</th>
                       <th>現價</th>
                       <th>漲跌幅</th>
                       <th>加權本益比</th>
@@ -1652,12 +1660,11 @@ def main():
             sortedEtfs.forEach((etf, index) => {
                 let mappedName = getEtfName(etf);
                 let category = getEtfCategory(etf);
-                let categoryBadge = categoryBadgeHtml(category);
-                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" data-category="${category}" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span>${categoryBadge}</button>`;
-                compareHtml += `<div class="form-check form-check-inline compare-etf-item" data-category="${category}"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span>${categoryBadge}</label></div>`;
+                listHtml += `<button class="list-group-item list-group-item-action etf-item-btn font-monospace" data-category="${category}" id="btn-etf-${etf}" onclick="selectEtf('${etf}')"><i class="bi bi-box-se me-2 text-primary"></i><b>${etf}</b> <span class="text-muted small ms-1">${mappedName}</span></button>`;
+                compareHtml += `<div class="form-check form-check-inline compare-etf-item" data-category="${category}"><input class="form-check-input" type="checkbox" value="${etf}" id="chk-${etf}" onchange="renderCompareMatrix()"><label class="form-check-label font-monospace" for="chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 
                 if (isActiveEtf(etf)) {
-                    radarHtml += `<div class="form-check form-check-inline radar-etf-item" data-category="${category}"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span>${categoryBadge}</label></div>`;
+                    radarHtml += `<div class="form-check form-check-inline radar-etf-item" data-category="${category}"><input class="form-check-input radar-cb" type="checkbox" value="${etf}" id="radar-chk-${etf}" onchange="calculateRadarConsensus()"><label class="form-check-label font-monospace" for="radar-chk-${etf}"><b>${etf}</b> <span class="text-muted small">${mappedName}</span></label></div>`;
                 }
 
                 let quote = getLiveQuote(etf);
@@ -1702,7 +1709,6 @@ def main():
                 homeHtml += `<tr data-category="${category}">
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
-                    <td>${categoryBadge}</td>
                     <td class="font-monospace fw-bold">${price}</td>
                     <td class="font-monospace ${styleColor}">${displayChange}</td>
                     <td class="font-monospace fw-bold text-info">${weightedPer}</td>
