@@ -58,7 +58,17 @@ ETF_CATEGORY_MAP = {
 # FinMind API 金鑰
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "") or st.secrets.get("GEMINI_API_KEY", "")
+def get_gemini_api_key():
+    value = os.environ.get("GEMINI_API_KEY", "")
+    if not value:
+        try:
+            value = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            value = ""
+    return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
+
+
+GEMINI_API_KEY = get_gemini_api_key()
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -200,7 +210,7 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. FinMind PBR/PER 快取與查詢
 # ==========================================
-@st.cache_data(ttl=3600)  
+@st.cache_data(ttl=28800)
 def fetch_valuation_weights_cached(stock_codes, date_str):
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -479,9 +489,9 @@ def fetch_backend_data_to_json():
 
 
 @st.cache_data(ttl=900)
-def fetch_gemini_insight(summary_text):
+def fetch_gemini_insight(summary_text, api_key):
     """用精簡後的異動摘要請 Gemini 產生可讀的市場分析。"""
-    if not GEMINI_API_KEY:
+    if not api_key:
         return "尚未設定 GEMINI_API_KEY；請在 Streamlit Secrets 加入後重新整理。"
     endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     prompt = f"""你是 ETF 資料分析助理。請根據以下歷史持股異動摘要，使用繁體中文輸出：
@@ -496,7 +506,7 @@ def fetch_gemini_insight(summary_text):
     try:
         response = requests.post(
             endpoint,
-            params={"key": GEMINI_API_KEY},
+            params={"key": api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=25,
         )
@@ -544,7 +554,7 @@ def main():
     try:
         analysis_df = pd.DataFrame(json.loads(json_data))
         gemini_insight_json = json.dumps(
-            fetch_gemini_insight(build_gemini_summary(analysis_df)),
+            fetch_gemini_insight(build_gemini_summary(analysis_df), get_gemini_api_key()),
             ensure_ascii=False,
         )
     except Exception as exc:
@@ -650,6 +660,17 @@ def main():
           padding: 0.75rem 1.25rem;
           border-radius: 8px;
           cursor: pointer;
+        }
+        #mainTabs {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          align-items: center;
+          padding-bottom: 4px;
+        }
+        #mainTabs .nav-item { flex: 0 0 auto; }
+        @media (max-width: 1200px) {
+          .nav-tabs .nav-link { padding: 0.55rem 0.75rem; font-size: 0.9rem; }
         }
         .nav-tabs .nav-link.active {
           background-color: #e2e8f0;
@@ -880,8 +901,9 @@ def main():
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-shield-bar-chart-fill text-info me-2"></i>ETF 風險與集中度</button>
+          </li>
+          <li class="nav-item">
             <button class="nav-link" id="tab-i" onclick="switchTab('content-i', 'tab-i')"><i class="bi bi-clipboard2-check text-warning me-2"></i>資料品質檢查</button>
-            <button class="nav-link" id="tab-j" onclick="switchTab('content-j', 'tab-j')"><i class="bi bi-diagram-2 text-success me-2"></i>成分股重疊排行</button>
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
@@ -1003,6 +1025,16 @@ def main():
                 </div>
               </div>
             </div>
+            <div class="card p-3 mt-4">
+              <div class="card-header bg-white text-success"><i class="bi bi-diagram-2 me-2"></i>成分股重疊排行</div>
+              <div class="row g-3 mb-3" id="overlapKpiCards"></div>
+              <div class="table-responsive" style="max-height: 520px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead><tr><th>排行</th><th>股票</th><th class="text-end">持有 ETF 數</th><th class="text-end">涵蓋分類數</th><th class="text-end">平均權重</th><th>分類</th></tr></thead>
+                  <tbody id="overlapTableBody"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <!-- 主動型經理人共識雷達 Tab -->
@@ -1023,7 +1055,7 @@ def main():
               </div>
               <div class="table-responsive" style="max-height: 620px; overflow: auto;">
                 <table class="table table-hover align-middle">
-                  <thead><tr><th>ETF</th><th>分類</th><th class="text-end">有效成分股</th><th class="text-end">前十大權重</th><th class="text-end">前十大集中度</th><th>風險提示</th></tr></thead>
+                  <thead><tr><th>ETF</th><th>分類</th><th class="text-end">有效成分股</th><th class="text-end">前十大權重</th><th class="text-end">近一期持股方向</th><th>風險提示</th></tr></thead>
                   <tbody id="riskRankingBody"></tbody>
                 </table>
               </div>
@@ -1780,22 +1812,6 @@ def main():
             </div>
           </div>
 
-          <div class="custom-tab-content" id="content-j">
-            <div class="card p-4 bg-light border-0 mb-4">
-              <h4 class="fw-bold text-dark mb-1"><i class="bi bi-diagram-2 text-success me-2"></i>成分股重疊排行</h4>
-              <div class="small text-muted">以最新資料統計被最多 ETF 持有的個股，並同時呈現涵蓋分類數與平均權重。</div>
-            </div>
-            <div class="row g-3 mb-4" id="overlapKpiCards"></div>
-            <div class="card p-3">
-              <div class="table-responsive" style="max-height: 650px; overflow: auto;">
-                <table class="table table-hover align-middle">
-                  <thead><tr><th>排行</th><th>股票</th><th class="text-end">持有 ETF 數</th><th class="text-end">涵蓋分類數</th><th class="text-end">平均權重</th><th>分類</th></tr></thead>
-                  <tbody id="overlapTableBody"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
         </div>
       </div>
 
@@ -1924,8 +1940,6 @@ def main():
                 renderRelationAnalysis();
             } else if (contentId === 'content-i') {
                 renderQualityAnalysis();
-            } else if (contentId === 'content-j') {
-                renderOverlapAnalysis();
             } else if (contentId === 'content-c') {
                 loadGlobalChanges();
             } else if (contentId === 'content-d') {
@@ -1950,7 +1964,12 @@ def main():
                 const top10 = weights.slice(0, 10).reduce((sum, value) => sum + value, 0);
                 const hhi = weights.reduce((sum, value) => sum + Math.pow(value / 100, 2), 0);
                 const risk = top10 >= 50 ? '集中度高' : (top10 >= 35 ? '中度集中' : '相對分散');
-                return {code, category: getEtfCategory(code), count: weights.length, top10, hhi, risk, date: snapshot.latestDate || '-'};
+                const previousDate = snapshot.dates.length > 1 ? snapshot.dates[snapshot.dates.length - 2] : null;
+                const allRows = globalRawData.filter(row => row.etf === code);
+                const previousRows = previousDate ? allRows.filter(row => row.date === previousDate && isNormalStock(row.stock, row.name)) : [];
+                const volumeDiff = snapshot.rows.reduce((sum, row) => sum + toNumber(row.volume), 0) - previousRows.reduce((sum, row) => sum + toNumber(row.volume), 0);
+                const direction = previousDate ? (volumeDiff > 0 ? '淨加碼' : (volumeDiff < 0 ? '淨減碼' : '持平')) : '資料不足';
+                return {code, category: getEtfCategory(code), count: weights.length, top10, hhi, risk, direction, date: snapshot.latestDate || '-'};
             });
             const highRisk = stats.filter(item => item.top10 >= 50).length;
             const averageTop10 = stats.length ? stats.reduce((sum, item) => sum + item.top10, 0) / stats.length : 0;
@@ -1964,7 +1983,7 @@ def main():
             document.getElementById('riskRankingBody').innerHTML = stats.sort((a, b) => b.top10 - a.top10).map(item => `<tr>
                 <td class="font-monospace fw-bold">${item.code} <span class="text-muted small">${getEtfName(item.code)}</span></td>
                 <td>${categoryBadgeHtml(item.category)}</td><td class="text-end">${item.count}</td>
-                <td class="text-end">${item.top10.toFixed(2)}%</td><td class="text-end">${(item.top10 / 10).toFixed(2)}%</td>
+                <td class="text-end">${item.top10.toFixed(2)}%</td><td class="text-end ${item.direction === '淨加碼' ? 'text-danger' : (item.direction === '淨減碼' ? 'text-success' : 'text-secondary')}">${item.direction}</td>
                 <td class="${item.top10 >= 50 ? 'text-danger' : 'text-secondary'}">${item.risk}</td>
             </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted">無資料</td></tr>';
             const riskBox = document.getElementById('geminiRiskInsight');
@@ -2336,6 +2355,7 @@ def main():
                     return `<tr><td>${categoryBadgeHtml(category)}</td><td class="text-end">${item.etfs}</td><td class="text-end">${average}</td><td>${newest}</td></tr>`;
                 }).join('');
             document.getElementById('relationCoverageBody').innerHTML = coverageHtml || '<tr><td colspan="4" class="text-center text-muted">無資料</td></tr>';
+            renderOverlapAnalysis();
         }
 
         function filterEtfListByCategory() {
