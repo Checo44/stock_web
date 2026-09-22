@@ -299,7 +299,7 @@ def fetch_twse_live_data(etf_list):
         try:
             res = requests.get(
                 api_url,
-                params={"ex_ch": "|".join(channels)},
+                params={"ex_ch": "|".join(channels), "json": 1, "delay": 0},
                 headers=headers,
                 timeout=15,
             )
@@ -493,6 +493,22 @@ def main():
         .category-market { color: #155e75; background: #cffafe; border-color: #67e8f9; }
         .category-unknown { color: #475569; background: #f1f5f9; border-color: #cbd5e1; }
         .category-filter-label { font-weight: 700; color: #475569; white-space: nowrap; }
+        .category-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+        .category-tab {
+          border: 1px solid #cbd5e1;
+          background: #fff;
+          color: #475569;
+          border-radius: 999px;
+          padding: 6px 14px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .category-tab:hover, .category-tab.active { color: #fff; border-color: #1e3c72; background: #1e3c72; }
+        .category-tab.tab-active.active { background: #c2410c; border-color: #c2410c; }
+        .category-tab.tab-dividend.active { background: #15803d; border-color: #15803d; }
+        .category-tab.tab-theme.active { background: #7e22ce; border-color: #7e22ce; }
+        .category-tab.tab-overseas.active { background: #1d4ed8; border-color: #1d4ed8; }
+        .category-tab.tab-market.active { background: #0e7490; border-color: #0e7490; }
         .navbar {
           background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
           box-shadow: 0 4px 12px rgba(0,0,0,0.1);
@@ -796,18 +812,19 @@ def main():
           <!-- 首頁 Tab -->
           <div class="custom-tab-content active" id="content-home">
             <div class="card px-3 py-2 mb-3">
-              <div class="d-flex align-items-center gap-2">
-                <span class="category-filter-label">首頁 ETF 類別</span>
-                <select id="homeCategoryFilter" class="form-select form-select-sm" style="max-width: 180px;" onchange="filterHomeByCategory()">
-                  <option value="all">全部分類</option>
-                  <option value="主動型">主動型</option>
-                  <option value="高息型">高息型</option>
-                  <option value="主題型">主題型</option>
-                  <option value="海外型">海外型</option>
-                  <option value="市值型">市值型</option>
-                </select>
+              <div class="d-flex align-items-center gap-3 flex-wrap">
+                <span class="category-filter-label">ETF 分類</span>
+                <div class="category-tabs" id="homeCategoryTabs">
+                  <button class="category-tab active" data-category="all" onclick="setHomeCategory('all', this)">全部</button>
+                  <button class="category-tab tab-active" data-category="主動型" onclick="setHomeCategory('主動型', this)">主動型</button>
+                  <button class="category-tab tab-dividend" data-category="高息型" onclick="setHomeCategory('高息型', this)">高息型</button>
+                  <button class="category-tab tab-theme" data-category="主題型" onclick="setHomeCategory('主題型', this)">主題型</button>
+                  <button class="category-tab tab-overseas" data-category="海外型" onclick="setHomeCategory('海外型', this)">海外型</button>
+                  <button class="category-tab tab-market" data-category="市值型" onclick="setHomeCategory('市值型', this)">市值型</button>
+                </div>
               </div>
             </div>
+            <div class="row g-3 mb-3" id="categorySummary"></div>
             <div class="card p-0">
               <div class="table-responsive">
                 <table class="table home-table align-middle">
@@ -815,6 +832,7 @@ def main():
                     <tr>
                       <th>ETF代號</th>
                       <th>ETF名稱</th>
+                      <th>分類</th>
                       <th>現價</th>
                       <th>漲跌幅</th>
                       <th>加權本益比</th>
@@ -1571,14 +1589,25 @@ def main():
         }
 
         function getLiveQuote(code) {
-            const quote = twseLiveMarketData[code];
+            let quote = twseLiveMarketData[code];
+            if (!quote) {
+                const normalized = String(code).replace(/^0+/, '') || '0';
+                const matchedKey = Object.keys(twseLiveMarketData).find(key => {
+                    return (String(key).replace(/^0+/, '') || '0') === normalized;
+                });
+                quote = matchedKey ? twseLiveMarketData[matchedKey] : null;
+            }
             if (!quote) return { price: 0, changePct: null, volume: 0 };
 
-            const price = toNumber(quote.price) || toNumber(quote.z) || toNumber(quote.y);
+            const lastPrice = toNumber(quote.z);
             const yesterday = toNumber(quote.y);
+            const price = lastPrice || toNumber(quote.price) || yesterday;
             let changePct = quote.change_pct;
             if (changePct === null || changePct === undefined || changePct === '') {
-                changePct = price > 0 && yesterday > 0 ? ((price - yesterday) / yesterday) * 100 : null;
+                const comparisonPrice = lastPrice || toNumber(quote.price) || yesterday;
+                changePct = comparisonPrice > 0 && yesterday > 0
+                    ? ((comparisonPrice - yesterday) / yesterday) * 100
+                    : null;
             } else {
                 changePct = toNumber(changePct);
             }
@@ -1709,6 +1738,7 @@ def main():
                 homeHtml += `<tr data-category="${category}">
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
+                    <td>${categoryBadgeHtml(category)}</td>
                     <td class="font-monospace fw-bold">${price}</td>
                     <td class="font-monospace ${styleColor}">${displayChange}</td>
                     <td class="font-monospace fw-bold text-info">${weightedPer}</td>
@@ -1720,6 +1750,7 @@ def main():
             compareContainer.innerHTML = compareHtml;
             if(radarContainer) radarContainer.innerHTML = radarHtml;
             document.getElementById('homeTableBody').innerHTML = homeHtml;
+            renderCategorySummary();
 
             if(sortedEtfs.length > 0) {
                 selectEtf(sortedEtfs[0]);
@@ -1730,11 +1761,73 @@ def main():
             return selectedCategory === 'all' || element.dataset.category === selectedCategory;
         }
 
-        function filterHomeByCategory() {
-            const selected = document.getElementById('homeCategoryFilter').value;
+        function setHomeCategory(selected, button) {
+            document.querySelectorAll('#homeCategoryTabs .category-tab').forEach(tab => tab.classList.remove('active'));
+            if (button) button.classList.add('active');
+            filterHomeByCategory(selected);
+        }
+
+        function filterHomeByCategory(selected = 'all') {
             document.querySelectorAll('#homeTableBody tr').forEach(row => {
                 row.style.display = categoryMatches(row, selected) ? '' : 'none';
             });
+        }
+
+        function renderCategorySummary() {
+            const categoryStats = {};
+            CATEGORY_ORDER.forEach(category => {
+                categoryStats[category] = {
+                    etfs: 0,
+                    holdingRows: 0,
+                    latestDates: new Set(),
+                    stocks: {}
+                };
+            });
+
+            const etfCodes = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))]);
+            etfCodes.forEach(code => {
+                const category = getEtfCategory(code);
+                if (!categoryStats[category]) return;
+                const data = globalRawData.filter(row => row.etf === code);
+                const dates = [...new Set(data.map(row => row.date))].sort((a, b) => new Date(a) - new Date(b));
+                if (!dates.length) return;
+                const latestDate = dates[dates.length - 1];
+                const latestRows = data.filter(row => row.date === latestDate && isNormalStock(row.stock, row.name));
+                const stats = categoryStats[category];
+                stats.etfs += 1;
+                stats.holdingRows += latestRows.length;
+                stats.latestDates.add(latestDate);
+                latestRows.forEach(row => {
+                    const key = row.stock;
+                    if (!stats.stocks[key]) {
+                        stats.stocks[key] = { name: row.name || row.stock, count: 0 };
+                    }
+                    stats.stocks[key].count += 1;
+                });
+            });
+
+            const html = CATEGORY_ORDER.map(category => {
+                const stats = categoryStats[category];
+                const averageHoldings = stats.etfs ? (stats.holdingRows / stats.etfs).toFixed(1) : '0.0';
+                const topStocks = Object.entries(stats.stocks)
+                    .sort((a, b) => b[1].count - a[1].count)
+                    .slice(0, 3)
+                    .map(([code, item]) => `${code}（${item.count} 檔）`)
+                    .join('、') || '無資料';
+                const latestDate = [...stats.latestDates].sort().pop() || '-';
+                return `<div class="col-12 col-md-6 col-xl-4">
+                    <div class="card h-100 p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            ${categoryBadgeHtml(category)}
+                            <span class="text-muted small">${stats.etfs} 檔 ETF</span>
+                        </div>
+                        <div class="small text-muted">平均成分股數：<b>${averageHoldings}</b></div>
+                        <div class="small text-muted">最新資料：<b>${latestDate}</b></div>
+                        <div class="small text-muted mt-1">最常見成分股：<b>${topStocks}</b></div>
+                    </div>
+                </div>`;
+            }).join('');
+            document.getElementById('categorySummary').innerHTML = html;
         }
 
         function filterEtfListByCategory() {
