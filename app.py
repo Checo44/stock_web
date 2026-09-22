@@ -1,12 +1,12 @@
 import os
 import re
 import json
+import base64
 import requests
 import gspread
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # ==========================================
@@ -199,15 +199,6 @@ def fetch_etf_name_mapping():
 # ==========================================
 @st.cache_data(ttl=3600)  
 def fetch_valuation_weights_cached(stock_codes, date_str):
-    valid_stocks = []
-    for code in stock_codes:
-        clean_code = str(code).strip()
-        if re.match(r"^\d{4,6}$", clean_code):
-            valid_stocks.append(clean_code)
-            
-    if not valid_stocks:
-        return {}
-
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         start_dt = dt - timedelta(days=7)
@@ -215,33 +206,29 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     except Exception:
         start_date_str = date_str
 
-    valuation_results = {}
-    
-    for code in valid_stocks:
-        url = "https://api.finmindtrade.com/api/v4/data"
-        params = {
-            "dataset": "TaiwanStockPER",  
-            "data_id": code,
-            "start_date": start_date_str,
-            "end_date": date_str,
-        }
-        if FINMIND_TOKEN:
-            params["token"] = FINMIND_TOKEN
-            
-        try:
-            res = requests.get(url, params=params, timeout=10)
-            if res.status_code == 200:
-                data = res.json().get("data", [])
-                if data:
-                    last_record = data[-1]
-                    valuation_results[code] = {
-                        "pbr": float(last_record.get("PBR", last_record.get("pbr", 0.0)) or 0.0),
-                        "per": float(last_record.get("PER", last_record.get("per", 0.0)) or 0.0)
-                    }
-        except Exception as e:
-            print(f"FinMind API 連線失敗 ({code}): {e}")
-            
-    return valuation_results
+    # 批次查詢取代逐檔查詢，避免大量 ETF 成分股造成網站長時間載入。
+    url = "https://api.finmindtrade.com/api/v4/data"
+    params = {"dataset": "TaiwanStockPER", "start_date": start_date_str, "end_date": date_str}
+    if FINMIND_TOKEN:
+        params["token"] = FINMIND_TOKEN
+    try:
+        response = requests.get(url, params=params, timeout=20)
+        response.raise_for_status()
+        records = response.json().get("data", [])
+        requested = {str(code).strip() for code in stock_codes}
+        result = {}
+        for record in records:
+            code = str(record.get("stock_id", record.get("data_id", ""))).strip()
+            if code not in requested:
+                continue
+            result[code] = {
+                "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
+                "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
+            }
+        return result
+    except Exception as exc:
+        print(f"FinMind 批次估值讀取略過：{exc}")
+        return {}
 
 # ==========================================
 # 4. 外部即時行情 API 整合
@@ -828,6 +815,21 @@ def main():
               </div>
             </div>
             <div class="row g-3 mb-3" id="categorySummary"></div>
+            <div class="card p-3 mb-3">
+              <div class="row g-2 align-items-center">
+                <div class="col-md-5"><input id="homeEtfSearch" class="form-control" placeholder="搜尋 ETF 代號或名稱" oninput="applyHomeFilters()"></div>
+                <div class="col-md-3">
+                  <select id="homeSortSelect" class="form-select" onchange="applyHomeFilters()">
+                    <option value="default">依預設順序</option>
+                    <option value="changeDesc">漲幅由高至低</option>
+                    <option value="changeAsc">跌幅由高至低</option>
+                    <option value="priceDesc">現價由高至低</option>
+                    <option value="name">名稱排序</option>
+                  </select>
+                </div>
+                <div class="col-md-4 text-muted small" id="homeFilterStatus">顯示全部 ETF</div>
+              </div>
+            </div>
             <div class="card p-0">
               <div class="table-responsive">
                 <table class="table home-table align-middle">
@@ -873,7 +875,7 @@ def main():
                   <div class="card-header bg-white text-success"><i class="bi bi-fire me-2"></i>跨類別共同持股熱點</div>
                   <div class="table-responsive">
                     <table class="table table-hover align-middle">
-                      <thead><tr><th>股票</th><th>涵蓋類別</th><th>ETF 家數</th><th class="text-end">合計權重</th><th>出現類別</th></tr></thead>
+                      <thead><tr><th>股票</th><th>涵蓋類別</th><th>ETF 家數</th><th class="text-end">平均權重</th><th class="text-end">合計權重</th><th>出現類別</th></tr></thead>
                       <tbody id="relationHotspotBody"></tbody>
                     </table>
                   </div>
@@ -999,6 +1001,7 @@ def main():
                     <option value="海外型">海外型</option>
                     <option value="市值型">市值型</option>
                   </select>
+                  <input id="etfListSearch" class="form-control form-control-sm mb-3" placeholder="搜尋 ETF 代號或名稱" oninput="filterEtfListByCategory()">
                   <div class="list-group etf-list-group" id="etfListGroup"></div>
                 </div>
               </div>
@@ -1009,6 +1012,12 @@ def main():
                     <span id="txtEtfCode" class="badge bg-primary me-2 font-monospace"></span>
                     <span id="txtEtfName"></span>
                     <span id="txtUpdateDate" class="update-date-text"></span>
+                  </div>
+                </div>
+                <div class="card p-3 mb-3">
+                  <div class="row g-2 align-items-center">
+                    <div class="col-md-5"><input id="holdingSearchInput" class="form-control" placeholder="搜尋成分股代號或名稱" oninput="renderStockTable()"></div>
+                    <div class="col-md-7 text-muted small" id="etfChangeSummary">選取 ETF 後顯示持股摘要</div>
                   </div>
                 </div>
                 
@@ -1218,7 +1227,15 @@ def main():
                     <option value="市值型">市值型</option>
                   </select>
                 </div>
-                <div class="col-md-2 pt-md-4">
+                <div class="col-md-2">
+                  <label class="form-label fw-bold text-secondary">比較區間</label>
+                  <select id="stockChangeRange" class="form-select">
+                    <option value="1" selected>前一交易日</option>
+                    <option value="5">前 5 個交易日</option>
+                    <option value="20">前 20 個交易日</option>
+                  </select>
+                </div>
+                <div class="col-md-1 pt-md-4">
                   <button class="btn btn-primary btn-lg w-100" onclick="searchStockDistribution()"><i class="bi bi-pie-chart me-1"></i>分析分佈</button>
                 </div>
               </div>
@@ -1350,7 +1367,9 @@ def main():
                   </div>
                 </div>
                 <div class="col-md-3 pt-md-4">
-                  <button class="btn btn-success w-100" onclick="loadGlobalChanges()"><i class="bi bi-arrow-repeat me-1"></i>生成全市場異動報表</button>
+                  <button class="btn btn-success w-100 mb-2" onclick="loadGlobalChanges()"><i class="bi bi-arrow-repeat me-1"></i>生成全市場異動報表</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100" onclick="downloadTableCsv('globalNewBody', 'global_new_changes.csv')">下載新增 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100 mt-1" onclick="downloadTableCsv('globalDelBody', 'global_deleted_changes.csv')">下載剔除 CSV</button>
                 </div>
               </div>
             </div>
@@ -1403,7 +1422,9 @@ def main():
                   </div>
                 </div>
                 <div class="col-md-3 pt-md-4">
-                  <button class="btn btn-danger w-100" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
+                  <button class="btn btn-danger w-100 mb-2" onclick="loadMarketHeat()"><i class="bi bi-fire me-1"></i>生成市場熱度分析</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100" onclick="downloadTableCsv('heatBuyAmtBodyDom', 'market_heat_buy_amount.csv')">下載買超金額 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm w-100 mt-1" onclick="downloadTableCsv('heatSellAmtBodyDom', 'market_heat_sell_amount.csv')">下載賣超金額 CSV</button>
                 </div>
               </div>
             </div>
@@ -1543,8 +1564,13 @@ def main():
                     <option value="海外型">海外型</option>
                     <option value="市值型">市值型</option>
                   </select>
+                  <input id="compareEtfSearch" class="form-control form-control-sm" style="max-width: 240px;" placeholder="搜尋比較 ETF" oninput="filterCompareBySearch()">
                 </div>
                 <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer"></div>
+                <div class="mt-2 text-end">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareCoreTableBody', 'etf_compare_core.csv')">下載共同核心 CSV</button>
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareUniqueTableBody', 'etf_compare_unique.csv')">下載差異持股 CSV</button>
+                </div>
             </div>
             <div class="row g-3 mb-4" id="compareSelectionSummary"></div>
             
@@ -1738,6 +1764,27 @@ def main():
             return true;
         }
 
+        function downloadTableCsv(tbodyId, filename) {
+            const tbody = document.getElementById(tbodyId);
+            if (!tbody) return;
+            const table = tbody.closest('table');
+            if (!table) return;
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const csv = rows.map(row => Array.from(row.cells).map(cell => {
+                const text = cell.innerText.replace(/\\s+/g, ' ').trim().replace(/"/g, '""');
+                return `"${text}"`;
+            }).join(',')).join('\\n');
+            const blob = new Blob(["\\uFEFF" + csv], {type: 'text/csv;charset=utf-8;'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        }
+
         function initDashboard() {
             let etfSet = new Set();
             globalRawData.forEach(r => { if(r.etf) etfSet.add(r.etf); });
@@ -1801,7 +1848,7 @@ def main():
                 let weightedPer = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
                 let weightedPbr = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
 
-                homeHtml += `<tr data-category="${category}">
+                homeHtml += `<tr data-category="${category}" data-change="${quote.changePct === null ? 0 : quote.changePct}" data-price="${quote.price || 0}">
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
                     <td>${categoryBadgeHtml(category)}</td>
@@ -1817,6 +1864,7 @@ def main():
             if(radarContainer) radarContainer.innerHTML = radarHtml;
             document.getElementById('homeTableBody').innerHTML = homeHtml;
             renderCategorySummary();
+            applyHomeFilters();
 
             if(sortedEtfs.length > 0) {
                 selectEtf(sortedEtfs[0]);
@@ -1830,13 +1878,41 @@ def main():
         function setHomeCategory(selected, button) {
             document.querySelectorAll('#homeCategoryTabs .category-tab').forEach(tab => tab.classList.remove('active'));
             if (button) button.classList.add('active');
+            activeHomeCategory = selected;
             filterHomeByCategory(selected);
         }
 
+        let activeHomeCategory = 'all';
+
         function filterHomeByCategory(selected = 'all') {
-            document.querySelectorAll('#homeTableBody tr').forEach(row => {
-                row.style.display = categoryMatches(row, selected) ? '' : 'none';
+            activeHomeCategory = selected;
+            applyHomeFilters();
+        }
+
+        function applyHomeFilters() {
+            const body = document.getElementById('homeTableBody');
+            if (!body) return;
+            const query = (document.getElementById('homeEtfSearch')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('homeSortSelect')?.value || 'default';
+            const rows = Array.from(body.querySelectorAll('tr'));
+            const visible = rows.filter(row => {
+                const categoryOk = activeHomeCategory === 'all' || row.dataset.category === activeHomeCategory;
+                const textOk = !query || row.innerText.toUpperCase().includes(query);
+                row.style.display = categoryOk && textOk ? '' : 'none';
+                return categoryOk && textOk;
             });
+            if (sortType !== 'default') {
+                visible.sort((a, b) => {
+                    if (sortType === 'name') return a.cells[1].innerText.localeCompare(b.cells[1].innerText, 'zh-Hant');
+                    if (sortType === 'changeDesc') return Number(b.dataset.change || 0) - Number(a.dataset.change || 0);
+                    if (sortType === 'changeAsc') return Number(a.dataset.change || 0) - Number(b.dataset.change || 0);
+                    if (sortType === 'priceDesc') return Number(b.dataset.price || 0) - Number(a.dataset.price || 0);
+                    return 0;
+                });
+                visible.forEach(row => body.appendChild(row));
+            }
+            const status = document.getElementById('homeFilterStatus');
+            if (status) status.innerText = `顯示 ${visible.length} / ${rows.length} 檔 ETF${query ? `｜搜尋：${query}` : ''}`;
         }
 
         function renderCategorySummary() {
@@ -1947,16 +2023,18 @@ def main():
             ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
 
             const hotspotHtml = crossCategoryStocks
-                .sort((a, b) => b.categories.size - a.categories.size || b.etfs.size - a.etfs.size || b.totalWeight - a.totalWeight)
+                .map(item => ({...item, averageWeight: item.etfs.size ? item.totalWeight / item.etfs.size : 0}))
+                .sort((a, b) => b.categories.size - a.categories.size || b.averageWeight - a.averageWeight || b.totalWeight - a.totalWeight)
                 .slice(0, 30)
                 .map(item => `<tr>
                     <td class="fw-bold">${item.code} <span class="text-muted small">${item.name}</span></td>
                     <td>${item.categories.size} 類</td>
                     <td>${item.etfs.size} 檔</td>
+                    <td class="text-end">${item.averageWeight.toFixed(2)}%</td>
                     <td class="text-end">${item.totalWeight.toFixed(2)}%</td>
                     <td>${[...item.categories].map(categoryBadgeHtml).join(' ')}</td>
                 </tr>`).join('');
-            document.getElementById('relationHotspotBody').innerHTML = hotspotHtml || '<tr><td colspan="5" class="text-center text-muted">目前沒有跨類別共同持股資料</td></tr>';
+            document.getElementById('relationHotspotBody').innerHTML = hotspotHtml || '<tr><td colspan="6" class="text-center text-muted">目前沒有跨類別共同持股資料</td></tr>';
 
             const coverageHtml = CATEGORY_ORDER
                 .filter(category => selectedCategory === 'all' || selectedCategory === category)
@@ -1971,8 +2049,10 @@ def main():
 
         function filterEtfListByCategory() {
             const selected = document.getElementById('etfCategoryFilter').value;
+            const query = (document.getElementById('etfListSearch')?.value || '').trim().toUpperCase();
             document.querySelectorAll('#etfListGroup .etf-item-btn').forEach(button => {
-                button.style.display = categoryMatches(button, selected) ? '' : 'none';
+                const textOk = !query || button.innerText.toUpperCase().includes(query);
+                button.style.display = categoryMatches(button, selected) && textOk ? '' : 'none';
             });
         }
 
@@ -1994,6 +2074,13 @@ def main():
                 }
             });
             renderCompareMatrix();
+        }
+
+        function filterCompareBySearch() {
+            const query = (document.getElementById('compareEtfSearch')?.value || '').trim().toUpperCase();
+            document.querySelectorAll('#compareCheckboxContainer .compare-etf-item').forEach(item => {
+                item.style.display = !query || item.innerText.toUpperCase().includes(query) ? '' : 'none';
+            });
         }
 
         function filterStockDistributionByCategory() {
@@ -2182,14 +2269,30 @@ def main():
             document.getElementById('metaTop10Weight').innerText = `${top10Weight.toFixed(2)}%`;
             document.getElementById('metaHoldingCount').innerText = stocks.length.toLocaleString();
 
+            const previousDate = dates.length > 1 ? dates[dates.length - 2] : null;
+            const previousRows = previousDate ? etfData.filter(row => row.date === previousDate && isNormalStock(row.stock, row.name)) : [];
+            const currentWeight = stocks.reduce((sum, row) => sum + toNumber(row.weight), 0);
+            const previousWeight = previousRows.reduce((sum, row) => sum + toNumber(row.weight), 0);
+            const previousMap = new Map(previousRows.map(row => [row.stock, `${row.weight}|${row.volume}`]));
+            const changedCount = stocks.filter(row => previousMap.get(row.stock) !== `${row.weight}|${row.volume}`).length
+                + previousRows.filter(row => !stocks.some(current => current.stock === row.stock)).length;
+            const weightDiff = currentWeight - previousWeight;
+            document.getElementById('etfChangeSummary').innerText = previousDate
+                ? `前一交易日 ${previousDate}｜成分股 ${stocks.length} 檔｜權重合計 ${currentWeight.toFixed(2)}%（${weightDiff >= 0 ? '+' : ''}${weightDiff.toFixed(2)}%）｜異動 ${changedCount} 檔`
+                : `目前只有 ${latestDate} 資料，尚無前一交易日可比較`;
+
             renderIndustryPieChart(stocks);
             refreshEtfChanges(etfCode, dates);
         }
 
         function renderStockTable() {
             let filtered = currentEtfStocks;
+            const query = (document.getElementById('holdingSearchInput')?.value || '').trim().toUpperCase();
             if (selectedIndustries.length > 0) {
                 filtered = currentEtfStocks.filter(r => selectedIndustries.includes(r.industry || '未分類'));
+            }
+            if (query) {
+                filtered = filtered.filter(r => `${r.stock} ${r.name || ''}`.toUpperCase().includes(query));
             }
 
             let container = document.getElementById('selectedIndustryDisplayContainer');
@@ -2660,17 +2763,19 @@ def main():
 
                 let latestDate = dates[dates.length - 1];
                 let lRow = eData.find(d => d.date === latestDate && d.stock === targetCode);
-                let oRow = dates.length >= 2
-                    ? eData.find(d => d.date === dates[dates.length - 2] && d.stock === targetCode)
+                const rangeOffset = parseInt(document.getElementById('stockChangeRange')?.value || '1');
+                const oldIndex = dates.length - 1 - rangeOffset;
+                let oRow = oldIndex >= 0
+                    ? eData.find(d => d.date === dates[oldIndex] && d.stock === targetCode)
                     : null;
                 let oVol = oRow ? toNumber(oRow.volume) : 0;
                 let nVol = lRow ? toNumber(lRow.volume) : 0;
-                let diffVol = nVol - oVol;
+                let diffVol = oldIndex >= 0 ? nVol - oVol : 0;
                 totalHoldingVol += nVol;
                 const stockCategory = getEtfCategory(eCode);
                 if (stockCategoryStats[stockCategory]) {
                     stockCategoryStats[stockCategory].holding += nVol;
-                    stockCategoryStats[stockCategory].diff += dates.length >= 2 ? diffVol : 0;
+                    stockCategoryStats[stockCategory].diff += oldIndex >= 0 ? diffVol : 0;
                     if (lRow) stockCategoryStats[stockCategory].etfs += 1;
                 }
 
@@ -2684,7 +2789,7 @@ def main():
                     });
                 }
 
-                if (dates.length >= 2) {
+                if (oldIndex >= 0) {
                     totalVolDiff += diffVol;
                 }
 
@@ -3196,7 +3301,10 @@ def main():
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
 
-    components.html(html_template, height=1200, scrolling=True)
+    iframe_src = "data:text/html;base64," + base64.b64encode(
+        html_template.encode("utf-8")
+    ).decode("ascii")
+    st.iframe(iframe_src, height=1200)
 
 if __name__ == "__main__":
     main()
