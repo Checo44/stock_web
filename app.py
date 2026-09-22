@@ -1,6 +1,7 @@
 import os
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import gspread
 import numpy as np
@@ -56,6 +57,8 @@ ETF_CATEGORY_MAP = {
 
 # FinMind API 金鑰
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
+# 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
 # ==========================================
 # 2. 獨立安全的連線與資料載入核心
@@ -206,7 +209,12 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     except Exception:
         start_date_str = date_str
 
-    # 批次查詢取代逐檔查詢，避免大量 ETF 成分股造成網站長時間載入。
+    valid_stocks = sorted({str(code).strip() for code in stock_codes if re.match(r"^\d{4,6}$", str(code).strip())})
+    if not valid_stocks:
+        return {}
+
+    # 先嘗試一次批次查詢；部分 FinMind 版本不接受沒有 data_id 的請求，
+    # 因此若回傳空資料，再以有限併發補查，兼顧速度與結果完整性。
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {"dataset": "TaiwanStockPER", "start_date": start_date_str, "end_date": date_str}
     if FINMIND_TOKEN:
@@ -225,10 +233,42 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
                 "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
                 "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
             }
-        return result
+        if result:
+            return result
     except Exception as exc:
-        print(f"FinMind 批次估值讀取略過：{exc}")
-        return {}
+        print(f"FinMind 批次估值無結果，改用個股補查：{exc}")
+
+    def fetch_one(code):
+        one_params = {
+            "dataset": "TaiwanStockPER",
+            "data_id": code,
+            "start_date": start_date_str,
+            "end_date": date_str,
+        }
+        if FINMIND_TOKEN:
+            one_params["token"] = FINMIND_TOKEN
+        try:
+            one_response = requests.get(url, params=one_params, timeout=8)
+            one_response.raise_for_status()
+            rows = one_response.json().get("data", [])
+            if not rows:
+                return code, None
+            row = rows[-1]
+            return code, {
+                "pbr": float(row.get("PBR", row.get("pbr", 0.0)) or 0.0),
+                "per": float(row.get("PER", row.get("per", 0.0)) or 0.0),
+            }
+        except Exception:
+            return code, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(fetch_one, code) for code in valid_stocks]
+        for future in as_completed(futures):
+            code, value = future.result()
+            if value:
+                results[code] = value
+    return results
 
 # ==========================================
 # 4. 外部即時行情 API 整合
@@ -437,6 +477,57 @@ def fetch_backend_data_to_json():
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map
 
+
+@st.cache_data(ttl=900)
+def fetch_gemini_insight(summary_text):
+    """用精簡後的異動摘要請 Gemini 產生可讀的市場分析。"""
+    if not GEMINI_API_KEY:
+        return "尚未設定 GEMINI_API_KEY；請在 Streamlit Secrets 加入後重新整理。"
+    endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    prompt = f"""你是 ETF 資料分析助理。請根據以下歷史持股異動摘要，使用繁體中文輸出：
+1. ETF 與個股整體偏向加碼或減碼
+2. 最值得注意的個股與可能原因（只能根據資料推論，不得捏造新聞）
+3. 主動型 ETF 的共識方向
+4. 使用者還應觀察的風險與後續指標
+請用 5 到 8 個條列，最後加上「這不是投資建議」。
+
+資料摘要：
+{summary_text}"""
+    try:
+        response = requests.post(
+            endpoint,
+            params={"key": GEMINI_API_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=25,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as exc:
+        return f"Gemini 分析暫時無法取得：{exc}"
+
+
+def build_gemini_summary(df):
+    if df.empty:
+        return "目前沒有可分析的資料。"
+    dates = sorted(df["date"].dropna().unique())
+    latest_date = dates[-1]
+    previous_date = dates[-2] if len(dates) > 1 else None
+    latest = df[df["date"] == latest_date].copy()
+    current = latest.groupby(["stock", "name"], dropna=False)["volume"].sum()
+    lines = [f"最新日期：{latest_date}", f"資料筆數：{len(latest)}"]
+    if previous_date:
+        previous = df[df["date"] == previous_date].groupby(["stock", "name"], dropna=False)["volume"].sum()
+        diff = current.subtract(previous, fill_value=0).sort_values()
+        sell = diff.head(12)
+        buy = diff.tail(12).sort_values(ascending=False)
+        lines.append(f"比較日期：{previous_date} → {latest_date}")
+        lines.append("主要加碼：" + "；".join(f"{idx[0]} {idx[1]} {int(value):,}股" for idx, value in buy.items()))
+        lines.append("主要減碼：" + "；".join(f"{idx[0]} {idx[1]} {int(value):,}股" for idx, value in sell.items()))
+    etf_weight = latest.groupby("etf")["weight"].sum().sort_values(ascending=False).head(12)
+    lines.append("資料中權重最高 ETF：" + "；".join(f"{code} {value:.2f}%" for code, value in etf_weight.items()))
+    return "\n".join(lines)
+
 # ==========================================
 # 6. 主渲染邏輯
 # ==========================================
@@ -446,6 +537,14 @@ def main():
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
     etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
+    try:
+        analysis_df = pd.DataFrame(json.loads(json_data))
+        gemini_insight_json = json.dumps(
+            fetch_gemini_insight(build_gemini_summary(analysis_df)),
+            ensure_ascii=False,
+        )
+    except Exception as exc:
+        gemini_insight_json = json.dumps(f"Gemini 分析資料準備失敗：{exc}", ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -815,6 +914,11 @@ def main():
               </div>
             </div>
             <div class="row g-3 mb-3" id="categorySummary"></div>
+            <div class="card p-3 mb-3 border-start border-primary border-4">
+              <div class="fw-bold text-primary mb-2"><i class="bi bi-stars me-2"></i>Gemini ETF／個股買賣方向分析</div>
+              <div id="geminiInsightText" class="small text-secondary" style="white-space: pre-line;">分析載入中…</div>
+              <div class="small text-muted mt-2">分析僅根據目前持股異動資料產生，不代表投資建議。</div>
+            </div>
             <div class="card p-3 mb-3">
               <div class="row g-2 align-items-center">
                 <div class="col-md-5"><input id="homeEtfSearch" class="form-control" placeholder="搜尋 ETF 代號或名稱" oninput="applyHomeFilters()"></div>
@@ -941,6 +1045,8 @@ def main():
                 </div>
               </div>
             </div>
+            <div class="row g-3 mb-4" id="radarSummaryCards"></div>
+            <div class="alert alert-light border small text-secondary" id="radarDirectionSummary">請先選取主動型 ETF，再計算共識方向。</div>
             
             <div class="row g-4">
               <div class="col-md-6">
@@ -1566,7 +1672,7 @@ def main():
                   </select>
                   <input id="compareEtfSearch" class="form-control form-control-sm" style="max-width: 240px;" placeholder="搜尋比較 ETF" oninput="filterCompareBySearch()">
                 </div>
-                <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer"></div>
+                <div class="d-flex flex-wrap gap-3 p-3 bg-white border rounded" id="compareCheckboxContainer" style="max-height: 240px; overflow-y: auto;"></div>
                 <div class="mt-2 text-end">
                   <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareCoreTableBody', 'etf_compare_core.csv')">下載共同核心 CSV</button>
                   <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('compareUniqueTableBody', 'etf_compare_unique.csv')">下載差異持股 CSV</button>
@@ -1583,7 +1689,7 @@ def main():
               <div class="card-header bg-white text-primary fw-bold d-flex align-items-center">
                 <i class="bi bi-shield-heart-fill me-2 text-danger"></i>【英雄所見略同】共同核心持股矩陣（選定之 ETF 皆全數持有）
               </div>
-              <div class="table-responsive">
+              <div class="table-responsive" style="max-height: 560px; overflow: auto;">
                 <table class="table table-bordered align-middle">
                   <thead><tr id="compareCoreTableHeader"><th>股票代號</th><th>股票名稱</th><th>共同持有度</th></tr></thead>
                   <tbody id="compareCoreTableBody"></tbody>
@@ -1595,7 +1701,7 @@ def main():
               <div class="card-header bg-white text-secondary fw-bold d-flex align-items-center">
                 <i class="bi bi-pie-chart-fill me-2 text-warning"></i>【獨門特色持股】個別差異明細矩陣（僅部分 ETF 持有）
               </div>
-              <div class="table-responsive">
+              <div class="table-responsive" style="max-height: 560px; overflow: auto;">
                 <table class="table table-bordered align-middle">
                   <thead><tr id="compareUniqueTableHeader"><th>股票代號</th><th>股票名稱</th><th>共同持有度</th></tr></thead>
                   <tbody id="compareUniqueTableBody"></tbody>
@@ -1619,6 +1725,7 @@ def main():
         const tickerMappingData = __TICKER_PLACEHOLDER__;
         const etfNameMappingData = __ETF_NAME_PLACEHOLDER__;
         const etfCategoryData = __ETF_CATEGORY_PLACEHOLDER__;
+        const geminiInsight = __GEMINI_PLACEHOLDER__;
 
         // 可在此指定首頁、ETF清單、比較與雷達的顯示順序。
         // 未列出的 ETF 會依代號自然排序接在後面。
@@ -1863,6 +1970,8 @@ def main():
             compareContainer.innerHTML = compareHtml;
             if(radarContainer) radarContainer.innerHTML = radarHtml;
             document.getElementById('homeTableBody').innerHTML = homeHtml;
+            const geminiBox = document.getElementById('geminiInsightText');
+            if (geminiBox) geminiBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
             renderCategorySummary();
             applyHomeFilters();
 
@@ -2110,6 +2219,8 @@ def main():
             if (checkedEtfs.length === 0) {
                 document.getElementById('radarGoldBody').innerHTML = '<tr><td colspan="3" class="text-center text-muted">請先勾選上方欲納入分析的主動式 ETF 清單</td></tr>';
                 document.getElementById('radarWarningBody').innerHTML = '<tr><td colspan="3" class="text-center text-muted">請先勾選上方欲納入分析的主動式 ETF 清單</td></tr>';
+                document.getElementById('radarSummaryCards').innerHTML = '';
+                document.getElementById('radarDirectionSummary').innerText = '請先選取主動型 ETF，再計算共識方向。';
                 return;
             }
 
@@ -2209,6 +2320,14 @@ def main():
 
             document.getElementById('radarGoldBody').innerHTML = goldHtml || '<tr><td colspan="3" class="text-center text-muted">目前區間內無重疊加碼共識股</td></tr>';
             document.getElementById('radarWarningBody').innerHTML = warningHtml || '<tr><td colspan="3" class="text-center text-muted">目前區間內無重疊減持避險股</td></tr>';
+            document.getElementById('radarSummaryCards').innerHTML = [
+                ['分析 ETF', totalChecked, '檔', 'text-primary'],
+                ['加碼共識股', goldArray.length, '檔', 'text-danger'],
+                ['減碼警示股', warningArray.length, '檔', 'text-success'],
+                ['方向比', `${goldArray.length}:${warningArray.length}`, '加碼／減碼', 'text-secondary']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]} ${item[2]}</div></div></div>`).join('');
+            document.getElementById('radarDirectionSummary').innerText =
+                `本次比較 ${totalChecked} 檔主動型 ETF：共辨識 ${goldArray.length} 檔加碼共識股、${warningArray.length} 檔減碼警示股；排名依同方向 ETF 家數，不能單獨視為買賣建議。`;
         }
 
         function selectEtf(etfCode) {
@@ -2277,8 +2396,11 @@ def main():
             const changedCount = stocks.filter(row => previousMap.get(row.stock) !== `${row.weight}|${row.volume}`).length
                 + previousRows.filter(row => !stocks.some(current => current.stock === row.stock)).length;
             const weightDiff = currentWeight - previousWeight;
+            const weightDiffText = previousDate && previousRows.length
+                ? `${weightDiff >= 0 ? '+' : ''}${weightDiff.toFixed(2)} 個百分點`
+                : '無可比基準';
             document.getElementById('etfChangeSummary').innerText = previousDate
-                ? `前一交易日 ${previousDate}｜成分股 ${stocks.length} 檔｜權重合計 ${currentWeight.toFixed(2)}%（${weightDiff >= 0 ? '+' : ''}${weightDiff.toFixed(2)}%）｜異動 ${changedCount} 檔`
+                ? `目前持股權重合計 ${currentWeight.toFixed(2)}%｜前一交易日 ${previousDate}｜權重變化 ${weightDiffText}｜成分股異動 ${changedCount} 檔`
                 : `目前只有 ${latestDate} 資料，尚無前一交易日可比較`;
 
             renderIndustryPieChart(stocks);
@@ -3299,7 +3421,8 @@ def main():
                                  .replace("__TWSE_PLACEHOLDER__", twse_json)\
                                  .replace("__TICKER_PLACEHOLDER__", ticker_json)\
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
-                                 .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)
+                                 .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)\
+                                 .replace("__GEMINI_PLACEHOLDER__", gemini_insight_json)
 
     # 互動頁面包含 JavaScript 與 Chart.js；使用 components.html 可確保
     # Streamlit Cloud 重新整理後仍能執行嵌入腳本，避免 data URL iframe 黑屏。
