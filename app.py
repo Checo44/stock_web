@@ -1,6 +1,7 @@
 import os
 import re
 import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import gspread
@@ -80,21 +81,67 @@ GEMINI_API_KEY = get_gemini_api_key()
 # 2. 獨立安全的連線與資料載入核心
 # ==========================================
 def get_sheets_client():
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
-    if not creds_json and "GOOGLE_CREDENTIALS" in st.secrets:
-        creds_json = st.secrets["GOOGLE_CREDENTIALS"]
+    errors = []
+
+    def build_client(credentials):
+        """建立 gspread client，並相容 TOML 中以 \\n 保存的私鑰。"""
+        data = dict(credentials)
+        if data.get("private_key"):
+            data["private_key"] = str(data["private_key"]).replace("\\n", "\n")
+        return gspread.service_account_from_dict(data)
+
+    # 支援環境變數中的完整 service-account JSON。
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
+    if not creds_json:
+        try:
+            creds_json = st.secrets.get("GOOGLE_CREDENTIALS", "")
+        except Exception as exc:
+            errors.append(f"讀取 GOOGLE_CREDENTIALS Secret 失敗：{exc}")
 
     if creds_json:
         try:
-            clean_json = creds_json.strip().strip("'").strip('"')
-            return gspread.service_account_from_dict(json.loads(clean_json))
-        except:
-            pass
+            if isinstance(creds_json, dict):
+                return build_client(creds_json)
+            clean_json = str(creds_json).strip().strip("'").strip('"')
+            return build_client(json.loads(clean_json))
+        except Exception as exc:
+            errors.append(f"GOOGLE_CREDENTIALS JSON 無法解析：{exc}")
 
-    json_path = os.path.join(os.getcwd(), 'credentials.json')
-    if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return gspread.service_account_from_dict(json.load(f))
+    # Streamlit Cloud 常用的 Secrets 寫法：
+    # [gcp_service_account]
+    # type = "service_account"
+    try:
+        gcp_secret = st.secrets.get("gcp_service_account")
+        if gcp_secret:
+            return build_client(gcp_secret)
+    except Exception as exc:
+        errors.append(f"gcp_service_account Secret 無法使用：{exc}")
+
+    # 也支援直接貼在 Secrets 最上層的 TOML，不要求 [gcp_service_account] 區塊。
+    try:
+        top_level_secret = dict(st.secrets)
+        required_keys = {"type", "project_id", "private_key", "client_email"}
+        if required_keys.issubset(top_level_secret):
+            return build_client(top_level_secret)
+    except Exception as exc:
+        errors.append(f"頂層 Secrets 無法使用：{exc}")
+
+    # 本機執行時，從程式所在目錄或目前工作目錄尋找 credentials.json。
+    candidate_paths = [
+        Path(__file__).resolve().parent / "credentials.json",
+        Path.cwd() / "credentials.json",
+    ]
+    for json_path in dict.fromkeys(candidate_paths):
+        if json_path.exists():
+            try:
+                with json_path.open("r", encoding="utf-8") as file:
+                    return gspread.service_account_from_dict(json.load(file))
+            except Exception as exc:
+                errors.append(f"{json_path} 無法使用：{exc}")
+
+    detail = " | ".join(errors) if errors else "找不到 GOOGLE_CREDENTIALS、gcp_service_account 或頂層 service account Secrets。"
+    print("Google 憑證檢查結果：" + detail)
+    st.error(f"Google 憑證載入失敗：{detail}")
     return None
 
 @st.cache_resource
