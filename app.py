@@ -155,8 +155,12 @@ def init_gspread():
             return gc.open_by_key(SPREADSHEET_ID)
         return gc.open(SHEET_NAME)
     except Exception as exc:
-        print(f"Google Sheets 初始化失敗：{exc}")
-        pass
+        detail = f"{type(exc).__name__}: {exc}"
+        print(f"Google Sheets 開啟失敗：{detail}")
+        st.error(
+            "Google 憑證已載入，但無法開啟指定試算表。"
+            f"請確認 Spreadsheet ID、共用權限及 Google Sheets API。詳細原因：{detail}"
+        )
     return None
 
 sh = init_gspread()
