@@ -34,6 +34,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 SHEET_NAME = "ETF daily"
+# 與每日爬蟲使用同一份試算表。優先讀取部署環境設定，方便切換正式表。
+SPREADSHEET_ID = (
+    os.environ.get("GOOGLE_SPREADSHEET_ID", "").strip()
+    or st.secrets.get("GOOGLE_SPREADSHEET_ID", "").strip()
+    or "1Ue-BDdPXwXewkNWe08mf0HlN2yzF9kF2mpNvOSCgvb8"
+)
 WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
@@ -95,8 +101,14 @@ def get_sheets_client():
 def init_gspread():
     try:
         gc = get_sheets_client()
-        if gc: return gc.open(SHEET_NAME)
-    except:
+        if not gc:
+            return None
+        # 以 ID 開啟可避免同名試算表被讀錯；保留名稱只作為沒有 ID 設定時的相容路徑。
+        if SPREADSHEET_ID:
+            return gc.open_by_key(SPREADSHEET_ID)
+        return gc.open(SHEET_NAME)
+    except Exception as exc:
+        print(f"Google Sheets 初始化失敗：{exc}")
         pass
     return None
 
@@ -378,7 +390,8 @@ def process_and_standardize(raw_data, ticker_map=None):
     
     alias_map = {
         "etf": ["ETF代號", "ETF", "ETF碼"],
-        "date": ["日期", "時間", "Date"],
+        # 爬蟲 HISTORY_HEADER 使用「資料日期」，舊資料也可能使用「日期」。
+        "date": ["資料日期", "日期", "時間", "Date"],
         "stock": ["成分股代號", "股票代號", "代號", "商品代號"],
         "name": ["成分股名稱", "股票名稱", "公司名稱", "名稱", "商品名稱"], 
         "weight": ["持股權重", "權重", "權重(%)", "持股比例"],
@@ -456,13 +469,23 @@ def process_and_standardize(raw_data, ticker_map=None):
 # ==========================================
 def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
-    if err_msg: return "[]", {}, {}, {}, {}
+    if err_msg:
+        st.error(f"歷史資料讀取失敗：{err_msg}")
+        return "[]", {}, {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
     
     df, clean_err = process_and_standardize(raw_data, ticker_map=ticker_map)
-    if clean_err or df.empty: return "[]", {}, {}, {}, {}
+    if clean_err:
+        st.error(f"歷史資料欄位解析失敗：{clean_err}")
+        st.write("ETF History 實際表頭：", raw_data[0] if raw_data else [])
+        return "[]", {}, {}, {}, {}
+    if df.empty:
+        st.error("ETF History 已讀取，但日期解析後沒有可用資料。")
+        st.write("ETF History 實際表頭：", raw_data[0] if raw_data else [])
+        st.write("ETF History 前三筆資料：", raw_data[1:4] if raw_data else [])
+        return "[]", {}, {}, {}, {}
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
