@@ -11,6 +11,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
+# Gemini 使用 REST API 呼叫，因此不需要額外安裝 google-generativeai 套件。
+# 金鑰請放在 Streamlit Secrets：GEMINI_API_KEY = "你的金鑰"
+
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
 # ==========================================
@@ -66,12 +69,13 @@ ETF_CATEGORY_MAP = {
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
 def get_gemini_api_key():
-    value = os.environ.get("GEMINI_API_KEY", "")
-    if not value:
-        try:
-            value = st.secrets.get("GEMINI_API_KEY", "")
-        except Exception:
-            value = ""
+    """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
+    try:
+        secret_value = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        secret_value = ""
+
+    value = secret_value or os.environ.get("GEMINI_API_KEY", "")
     return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
 
 
