@@ -240,6 +240,60 @@ def fetch_ticker_mapping():
         return {}, f"讀取「{WORKSHEET_TICKER}」工作表失敗: {str(e)}"
 
 @st.cache_data(ttl=300)
+def fetch_stock_price_history():
+    """讀取「代號」工作表 D 欄起的 30 個交易日收盤價。"""
+    if not sh:
+        return {}, "無法連線至 Google 試算表"
+    try:
+        raw_ticker = sh.worksheet(WORKSHEET_TICKER).get_all_values()
+        if not raw_ticker or len(raw_ticker) < 2:
+            return {}, None
+
+        headers = [str(value).strip() for value in raw_ticker[0]]
+        code_idx = next((idx for idx, value in enumerate(headers)
+                         if value in ["股票代號", "代號", "成分股代號", "商品代號"]), 0)
+        date_columns = []
+        for idx, header in enumerate(headers):
+            if idx < 3:
+                continue
+            parsed = pd.to_datetime(header, errors="coerce")
+            if not pd.isna(parsed):
+                date_columns.append((idx, parsed.strftime("%Y-%m-%d")))
+
+        def normalize_stock_code(value):
+            text = str(value or "").strip().replace("'", "")
+            if text.endswith(".0") and text[:-2].isdigit():
+                text = text[:-2]
+            if text.isdigit() and len(text) < 4:
+                text = text.zfill(4)
+            return text
+
+        result = {}
+        for row in raw_ticker[1:]:
+            if len(row) <= code_idx:
+                continue
+            code = normalize_stock_code(row[code_idx])
+            if not code:
+                continue
+            prices = {}
+            for col_idx, date_key in date_columns:
+                if col_idx >= len(row):
+                    continue
+                value = str(row[col_idx]).strip().replace(",", "")
+                if not value or value in {"-", "--", "N/A"}:
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(number):
+                    prices[date_key] = number
+            result[code] = prices
+        return result, None
+    except Exception as e:
+        return {}, f"讀取「{WORKSHEET_TICKER}」收盤價失敗: {str(e)}"
+
+@st.cache_data(ttl=300)
 def fetch_etf_name_mapping():
     if not sh: return {}, "無法連線至 Google 試算表"
     try:
@@ -522,7 +576,7 @@ def fetch_backend_data_to_json():
     raw_data, err_msg = fetch_raw_sheet_data()
     if err_msg:
         st.error(f"歷史資料讀取失敗：{err_msg}")
-        return "[]", {}, {}, {}, {}
+        return "[]", {}, {}, {}, {}, {}
         
     ticker_map, _ = fetch_ticker_mapping()
     etf_name_map, _ = fetch_etf_name_mapping()
@@ -531,12 +585,16 @@ def fetch_backend_data_to_json():
     if clean_err:
         st.error(f"歷史資料欄位解析失敗：{clean_err}")
         st.write("ETF History 實際表頭：", raw_data[0] if raw_data else [])
-        return "[]", {}, {}, {}, {}
+        return "[]", {}, {}, {}, {}, {}
     if df.empty:
         st.error("ETF History 已讀取，但日期解析後沒有可用資料。")
         st.write("ETF History 實際表頭：", raw_data[0] if raw_data else [])
         st.write("ETF History 前三筆資料：", raw_data[1:4] if raw_data else [])
-        return "[]", {}, {}, {}, {}
+        return "[]", {}, {}, {}, {}, {}
+
+    price_history, price_err = fetch_stock_price_history()
+    if price_err:
+        print(f"收盤價資料讀取略過：{price_err}")
     
     all_etfs = sorted(list(df['etf'].dropna().unique()))
     twse_live_market = fetch_twse_live_data(all_etfs)
@@ -559,7 +617,7 @@ def fetch_backend_data_to_json():
         df['per'] = 0.0
     
     records = df.to_dict(orient="records")
-    return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map
+    return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map, price_history
 
 
 @st.cache_data(ttl=900)
@@ -620,10 +678,11 @@ def build_gemini_summary(df):
 # 6. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map = fetch_backend_data_to_json()
+    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+    price_history_json = json.dumps(price_history, ensure_ascii=False)
     etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
     try:
         analysis_df = pd.DataFrame(json.loads(json_data))
@@ -774,7 +833,26 @@ def main():
           border-color: #1e3c72 !important;
           color: #fff !important;
           font-weight: bold;
+          box-shadow: inset 4px 0 0 #93c5fd, 0 2px 5px rgba(30,60,114,0.22);
         }
+        .etf-item-btn.active .text-muted { color: rgba(255,255,255,0.82) !important; }
+        .etf-item-btn:focus-visible, .navbar-tool-btn:focus-visible {
+          outline: 3px solid rgba(147,197,253,0.85);
+          outline-offset: 2px;
+        }
+        .navbar-tool-btn {
+          border: 1px solid rgba(255,255,255,0.45);
+          color: #fff;
+          background: rgba(255,255,255,0.12);
+          font-size: 0.78rem;
+          padding: 0.3rem 0.55rem;
+        }
+        .navbar-tool-btn:hover, .navbar-tool-btn.active {
+          color: #1e3c72;
+          background: #fff;
+          border-color: #fff;
+        }
+        .etf-change-chart-wrap { position: relative; height: 360px; }
 
         /* 異動屬性徽章樣式 (新增/加碼/減持/剔除) */
         .badge-nature-new {
@@ -956,6 +1034,10 @@ def main():
       <nav class="navbar navbar-expand-lg navbar-dark sticky-top">
         <div class="container-fluid">
           <a class="navbar-brand" href="#"><i class="bi bi-cpu-fill me-2"></i>ETF 籌碼大數據監控面板</a>
+          <div class="d-flex align-items-center gap-2 ms-auto">
+            <button class="btn navbar-tool-btn" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-shield-bar-chart-fill me-1"></i>風險集中度</button>
+            <button class="btn navbar-tool-btn" id="tab-i" onclick="switchTab('content-i', 'tab-i')"><i class="bi bi-clipboard2-check me-1"></i>資料品質</button>
+          </div>
         </div>
       </nav>
 
@@ -972,12 +1054,6 @@ def main():
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-h" onclick="switchTab('content-h', 'tab-h')"><i class="bi bi-diagram-3-fill me-2 text-success"></i>跨類別關聯分析</button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link" id="tab-g" onclick="switchTab('content-g', 'tab-g')"><i class="bi bi-shield-bar-chart-fill text-info me-2"></i>ETF 風險與集中度</button>
-          </li>
-          <li class="nav-item">
-            <button class="nav-link" id="tab-i" onclick="switchTab('content-i', 'tab-i')"><i class="bi bi-clipboard2-check text-warning me-2"></i>資料品質檢查</button>
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-a" onclick="switchTab('content-a', 'tab-a')"><i class="bi bi-pie-chart-fill me-2"></i>單檔 ETF 籌碼與持股</button>
@@ -1357,6 +1433,27 @@ def main():
                         <div class="col-md-6"><i class="bi text-warning"></i><b>持倉成本說明：</b>當前公開數據集中不含實際持股成本資料。</div>
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                <div class="card mb-4" id="etfHoldingChangeChartCard">
+                  <div class="card-header text-primary d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span><i class="bi bi-graph-up-arrow me-2"></i>ETF 持股變化與個股收盤價</span>
+                    <div class="d-flex gap-2">
+                      <select id="etfChartStockSelect" class="form-select form-select-sm" onchange="renderEtfHoldingChangeChart()" style="min-width: 190px;">
+                        <option value="">請先選擇個股</option>
+                      </select>
+                      <select id="etfChartRangeSelect" class="form-select form-select-sm" onchange="renderEtfHoldingChangeChart()" style="width: 105px;">
+                        <option value="20">近 20 日</option>
+                        <option value="60">近 60 日</option>
+                        <option value="120">近 120 日</option>
+                        <option value="all">全期間</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="etf-change-chart-wrap"><canvas id="etfHoldingChangeChart"></canvas></div>
+                    <div id="etfChartSummary" class="small text-muted mt-2">選擇個股後顯示持股股數、收盤價與平均成交價。</div>
                   </div>
                 </div>
                 
@@ -1896,6 +1993,7 @@ def main():
         const tickerMappingData = __TICKER_PLACEHOLDER__;
         const etfNameMappingData = __ETF_NAME_PLACEHOLDER__;
         const etfCategoryData = __ETF_CATEGORY_PLACEHOLDER__;
+        const priceHistoryData = __PRICE_HISTORY_PLACEHOLDER__;
         const geminiInsight = __GEMINI_PLACEHOLDER__;
 
         // 可在此指定首頁、ETF清單、比較與雷達的顯示順序。
@@ -1992,6 +2090,7 @@ def main():
         let selectedIndustries = [];     
         let industryChartInstance = null; 
         let stockCategoryChartInstance = null;
+        let etfHoldingChangeChartInstance = null;
 
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
@@ -2006,7 +2105,10 @@ def main():
             document.querySelectorAll('.custom-tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('#mainTabs .nav-link').forEach(el => el.classList.remove('active'));
             document.getElementById(contentId).classList.add('active');
-            document.getElementById(tabId).classList.add('active');
+            const tab = document.getElementById(tabId);
+            if (tab) tab.classList.add('active');
+            document.querySelectorAll('.navbar-tool-btn').forEach(el => el.classList.remove('active'));
+            if (tab && tab.classList.contains('navbar-tool-btn')) tab.classList.add('active');
 
             if (contentId === 'content-g') {
                 renderRiskAnalysis();
@@ -2468,10 +2570,18 @@ def main():
             });
         }
 
+        function setStockCategoryFilter(category) {
+            const select = document.getElementById('stockCategoryFilter');
+            if (!select) return;
+            select.value = category || 'all';
+            filterStockDistributionByCategory();
+        }
+
         function filterStockDistributionByCategory() {
-            const selected = document.getElementById('stockCategoryFilter').value;
-            document.querySelectorAll('#stockDistBody tr, #stockDistBody2 tr').forEach(row => {
-                row.style.display = categoryMatches(row, selected) ? '' : 'none';
+            const selected = document.getElementById('stockCategoryFilter')?.value || 'all';
+            document.querySelectorAll('#stockDistBody tr, #stockDistBody2 tr, #stockCategorySummary > div').forEach(row => {
+                const category = row.dataset.category || row.querySelector('[data-category]')?.dataset.category;
+                row.style.display = selected === 'all' || category === selected ? '' : 'none';
             });
         }
 
@@ -2673,6 +2783,73 @@ def main():
                 + previousRows.filter(row => !stocks.some(current => current.stock === row.stock)).length;
             renderIndustryPieChart(stocks);
             refreshEtfChanges(etfCode, dates);
+            renderEtfChartStockOptions(etfCode, stocks);
+        }
+
+        function renderEtfChartStockOptions(etfCode, stocks) {
+            const select = document.getElementById('etfChartStockSelect');
+            if (!select) return;
+            const previous = select.value;
+            const options = stocks
+                .filter(row => row.stock)
+                .sort((a, b) => toNumber(b.weight) - toNumber(a.weight))
+                .map(row => `<option value="${row.stock}">${row.stock} ${row.name || ''}</option>`)
+                .join('');
+            select.innerHTML = '<option value="">請先選擇個股</option>' + options;
+            if (previous && stocks.some(row => row.stock === previous)) select.value = previous;
+            else if (stocks.length) select.value = stocks[0].stock;
+            renderEtfHoldingChangeChart();
+        }
+
+        function renderEtfHoldingChangeChart() {
+            const canvas = document.getElementById('etfHoldingChangeChart');
+            const select = document.getElementById('etfChartStockSelect');
+            if (!canvas || !selectedEtf || !select || !select.value) return;
+            const stockCode = select.value;
+            const etfRows = globalRawData.filter(row => row.etf === selectedEtf && row.stock === stockCode);
+            const etfAllRows = globalRawData.filter(row => row.etf === selectedEtf);
+            let dates = [...new Set(etfAllRows.map(row => row.date))].sort((a, b) => new Date(a) - new Date(b));
+            const range = document.getElementById('etfChartRangeSelect')?.value || '20';
+            if (range !== 'all') dates = dates.slice(-Number(range));
+
+            const byDate = new Map(etfRows.map(row => [row.date, row]));
+            const values = [];
+            let previousHolding = 0;
+            dates.forEach(date => {
+                const row = byDate.get(date);
+                const holding = row ? toNumber(row.volume) : 0;
+                const close = toNumber(priceHistoryData[stockCode]?.[date]);
+                const averagePrice = row ? toNumber(row.price) : 0;
+                values.push({ date, holding, diff: holding - previousHolding, close, averagePrice });
+                previousHolding = holding;
+            });
+
+            if (etfHoldingChangeChartInstance) etfHoldingChangeChartInstance.destroy();
+            etfHoldingChangeChartInstance = new Chart(canvas.getContext('2d'), {
+                data: {
+                    labels: values.map(item => item.date),
+                    datasets: [
+                        { type: 'line', label: '持有股數', data: values.map(item => item.holding), borderColor: '#1e3c72', backgroundColor: 'rgba(30,60,114,0.12)', fill: true, tension: 0.25, yAxisID: 'yHolding', pointRadius: 2 },
+                        { type: 'line', label: '收盤價', data: values.map(item => item.close || null), borderColor: '#0e7490', tension: 0.25, yAxisID: 'yPrice', pointRadius: 2 },
+                        { type: 'line', label: '平均成交價', data: values.map(item => item.averagePrice || null), borderColor: '#c2410c', borderDash: [5, 4], tension: 0.2, yAxisID: 'yPrice', pointRadius: 1 },
+                        { type: 'line', label: '買進', data: values.map(item => item.diff > 0 ? (item.close || item.averagePrice || null) : null), borderColor: '#dc2626', backgroundColor: '#dc2626', showLine: false, pointRadius: 5, yAxisID: 'yPrice' },
+                        { type: 'line', label: '賣出', data: values.map(item => item.diff < 0 ? (item.close || item.averagePrice || null) : null), borderColor: '#15803d', backgroundColor: '#15803d', showLine: false, pointRadius: 5, yAxisID: 'yPrice' }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        yHolding: { type: 'linear', position: 'left', title: { display: true, text: '持有股數' }, beginAtZero: true },
+                        yPrice: { type: 'linear', position: 'right', title: { display: true, text: '價格' }, grid: { drawOnChartArea: false }, beginAtZero: false }
+                    },
+                    plugins: { legend: { position: 'top' } }
+                }
+            });
+            const buyCount = values.filter(item => item.diff > 0).length;
+            const sellCount = values.filter(item => item.diff < 0).length;
+            const totalDiff = values.reduce((sum, item) => sum + item.diff, 0);
+            document.getElementById('etfChartSummary').innerText = `${stockCode}：區間淨變動 ${totalDiff >= 0 ? '+' : ''}${totalDiff.toLocaleString()} 股，買進日 ${buyCount} 日，賣出日 ${sellCount} 日。收盤價來自「代號」工作表；缺值時仍保留持股異動。`;
         }
 
         function renderStockTable() {
@@ -2810,9 +2987,10 @@ def main():
                         text: `${label} (${Number(chart.data.datasets[0].data[index] || 0).toLocaleString()} 股)`,
                         fillStyle: chart.data.datasets[0].backgroundColor[index], index
                     }))}, onClick: (event, item, legend) => {
-                        const selected = legend.chart.data.labels[item.index];
-                        document.getElementById('stockCategoryFilter').value = selected;
-                        filterStockDistributionByCategory();
+                        if (!item || item.index === undefined) return;
+                        const clicked = legend.chart.data.labels[item.index];
+                        const current = document.getElementById('stockCategoryFilter')?.value || 'all';
+                        setStockCategoryFilter(current === clicked ? 'all' : clicked);
                     }}}
                 }
             });
@@ -3259,7 +3437,7 @@ def main():
                 const item = stockCategoryStats[category];
                 const diffText = item.diff > 0 ? `+${item.diff.toLocaleString()}` : item.diff.toLocaleString();
                 const diffClass = item.diff > 0 ? 'text-danger' : (item.diff < 0 ? 'text-success' : 'text-muted');
-                return `<div class="col-6 col-xl-4"><div class="card p-3 h-100">
+                return `<div class="col-6 col-xl-4" data-category="${category}"><div class="card p-3 h-100">
                     <div class="d-flex justify-content-between align-items-center">${categoryBadgeHtml(category)}<span class="small text-muted">${item.etfs} 檔持有</span></div>
                     <div class="small text-muted mt-2">分類合計持有：<b>${item.holding.toLocaleString()}</b></div>
                     <div class="small text-muted">前一交易日變化：<b class="${diffClass}">${diffText}</b></div>
@@ -3288,6 +3466,7 @@ def main():
                 <td class="text-end font-monospace">${h.volume.toLocaleString()}</td>
             </tr>`).join('');
             document.getElementById('stockDistBody2').innerHTML = distHtml2 || '<tr><td colspan="4" class="text-center text-muted">無持有數據</td></tr>';
+            filterStockDistributionByCategory();
         }
 
         function addTargetStock(code, name) {
@@ -3738,6 +3917,7 @@ def main():
                                  .replace("__TICKER_PLACEHOLDER__", ticker_json)\
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)\
+                                 .replace("__PRICE_HISTORY_PLACEHOLDER__", price_history_json)\
                                  .replace("__GEMINI_PLACEHOLDER__", gemini_insight_json)
 
     # 互動頁面包含 JavaScript 與 Chart.js；使用 components.html 可確保
