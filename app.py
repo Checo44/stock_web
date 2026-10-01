@@ -72,6 +72,45 @@ FINMIND_CACHE_TTL_SECONDS = 12 * 60 * 60
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
 def get_gemini_api_key():
     """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
+    def unwrap(value):
+        if value is None:
+            return ""
+        if isinstance(value, dict) or hasattr(value, "get"):
+            try:
+                value = value.get("GEMINI_API_KEY") or value.get("gemini_api_key") or value.get("api_key") or ""
+            except Exception:
+                return ""
+        if isinstance(value, str) and value.lstrip().startswith(("{", "'", '"')):
+            try:
+                decoded = json.loads(value)
+                if isinstance(decoded, dict):
+                    value = decoded.get("GEMINI_API_KEY") or decoded.get("gemini_api_key") or decoded.get("api_key") or ""
+            except (json.JSONDecodeError, TypeError):
+                try:
+                    decoded = ast.literal_eval(value)
+                    if isinstance(decoded, dict):
+                        value = decoded.get("GEMINI_API_KEY") or decoded.get("gemini_api_key") or decoded.get("api_key") or ""
+                except (ValueError, SyntaxError):
+                    pass
+        return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
+
+    # 先讀明確的頂層設定；這是 Streamlit Secrets 最穩定的寫法。
+    direct_values = []
+    try:
+        direct_values.extend([
+            st.secrets.get("GEMINI_API_KEY", ""),
+            st.secrets.get("gemini_api_key", ""),
+            # 容錯：若從 Markdown/訊息複製時把底線前的反斜線也帶入。
+            st.secrets.get("GEMINI\\_API\\_KEY", ""),
+        ])
+    except Exception:
+        pass
+    direct_values.append(os.environ.get("GEMINI_API_KEY", ""))
+    for candidate in direct_values:
+        direct_key = unwrap(candidate)
+        if direct_key:
+            return direct_key
+
     def find_key(container):
         """同時支援頂層字串、[GEMINI_API_KEY] 區塊及巢狀 Secrets。"""
         if isinstance(container, str):
@@ -83,7 +122,8 @@ def get_gemini_api_key():
                 except Exception:
                     items = list(dict(container).items())
                 for key, child in items:
-                    if str(key).strip().upper() in {"GEMINI_API_KEY", "API_KEY"}:
+                    normalized_key = str(key).strip().replace("\\", "").upper()
+                    if normalized_key in {"GEMINI_API_KEY", "API_KEY"}:
                         if child:
                             return child
                 for _, child in items:
@@ -99,23 +139,7 @@ def get_gemini_api_key():
     except Exception:
         secret_value = ""
 
-    value = secret_value or os.environ.get("GEMINI_API_KEY", "")
-    if isinstance(value, dict) or hasattr(value, "get"):
-        value = value.get("GEMINI_API_KEY", value.get("api_key", ""))
-    if isinstance(value, str) and value.lstrip().startswith("{"):
-        try:
-            decoded = json.loads(value)
-            if isinstance(decoded, dict):
-                value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
-        except json.JSONDecodeError:
-            # Streamlit Secrets/環境變數有時會把 Python dict 轉成單引號字串。
-            try:
-                decoded = ast.literal_eval(value)
-                if isinstance(decoded, dict):
-                    value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
-            except (ValueError, SyntaxError):
-                pass
-    return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
+    return unwrap(secret_value)
 
 
 GEMINI_API_KEY = get_gemini_api_key()
@@ -984,8 +1008,11 @@ def fetch_backend_data_to_json():
     try:
         latest_date = df['date'].max()
         unique_stocks = df['stock'].unique().tolist()
-        val_map = fetch_valuation_weights_cached(unique_stocks, latest_date)
-        global_val_map = fetch_global_valuation_cached(tuple(unique_stocks))
+        # PE/PB 與殖利率只需要最新持股；避免拿整份多年 History 的所有代號
+        # 逐一呼叫外部 API，造成首頁載入過久或被外部服務限流。
+        latest_stocks = df.loc[df['date'] == latest_date, 'stock'].dropna().unique().tolist()
+        val_map = fetch_valuation_weights_cached(latest_stocks, latest_date)
+        global_val_map = fetch_global_valuation_cached(tuple(latest_stocks))
 
         def valuation_for(row, field):
             local_value = safe_yield_value(row.get(field, 0))
@@ -1025,7 +1052,7 @@ def fetch_backend_data_to_json():
                 history_prices = price_history.get(history_key, {}) if history_key else {}
             if history_prices:
                 latest_price_map[stock_code] = history_prices[sorted(history_prices)[-1]]
-        dividend_map = fetch_dividend_policy_cached(unique_stocks, latest_price_map, latest_date)
+        dividend_map = fetch_dividend_policy_cached(latest_stocks, latest_price_map, latest_date)
         df['dividend_yield_5y'] = df['stock'].map(
             lambda code: dividend_map.get(code, {}).get('avg_yield_5y', 0.0)
         ).fillna(0.0)
@@ -2561,13 +2588,36 @@ def main():
         let stockCategoryChartInstance = null;
         let etfHoldingChangeChartInstance = null;
 
-        window.onload = function() {
-            document.getElementById('loading').style.display = 'none';
-            if (!globalRawData || globalRawData.length === 0) {
-                alert("後端未成功載入歷史數據，請確認試算表名稱與結構。");
-                return;
+        function showDashboardError(message) {
+            const loading = document.getElementById('loading');
+            if (loading) loading.style.display = 'none';
+            let box = document.getElementById('dashboardRuntimeError');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'dashboardRuntimeError';
+                box.style.cssText = 'margin:24px;padding:20px;border:1px solid #fecaca;border-radius:10px;background:#fff1f2;color:#991b1b;font-family:Arial,sans-serif;';
+                document.body.prepend(box);
             }
-            initDashboard();
+            box.innerHTML = `<b>頁面載入失敗</b><div style="margin-top:8px;white-space:pre-wrap;">${String(message || '未知錯誤')}</div><div style="margin-top:8px;color:#64748b;">請重新整理；若持續發生，請提供這段錯誤訊息。</div>`;
+        }
+
+        window.addEventListener('error', function(event) {
+            showDashboardError(event.error?.stack || event.message || 'JavaScript 執行錯誤');
+        });
+        window.addEventListener('unhandledrejection', function(event) {
+            showDashboardError(event.reason?.stack || event.reason || '非同步資料載入錯誤');
+        });
+        window.onload = function() {
+            try {
+                document.getElementById('loading').style.display = 'none';
+                if (!globalRawData || globalRawData.length === 0) {
+                    showDashboardError('後端未成功載入歷史數據，請確認試算表名稱與結構。');
+                    return;
+                }
+                initDashboard();
+            } catch (error) {
+                showDashboardError(error?.stack || error?.message || error);
+            }
         };
 
         function switchTab(contentId, tabId) {
