@@ -72,31 +72,21 @@ FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", 
 def get_gemini_api_key():
     """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
     try:
-        secret_value = st.secrets.get("GEMINI_API_KEY", "")
+        value = st.secrets.get("GEMINI_API_KEY", "")
     except Exception:
-        secret_value = ""
+        value = ""
 
-    value = secret_value or os.environ.get("GEMINI_API_KEY", "")
-    if isinstance(value, dict) or hasattr(value, "get"):
-        value = value.get("GEMINI_API_KEY", value.get("api_key", ""))
-    if isinstance(value, str) and value.lstrip().startswith("{"):
-        try:
-            decoded = json.loads(value)
-            if isinstance(decoded, dict):
-                value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
-        except json.JSONDecodeError:
-            # Streamlit Secrets/環境變數有時會把 Python dict 轉成單引號字串。
-            try:
-                decoded = ast.literal_eval(value)
-                if isinstance(decoded, dict):
-                    value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
-            except (ValueError, SyntaxError):
-                pass
-    return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
+    if not value:
+        value = os.environ.get("GEMINI_API_KEY", "")
 
+    return str(value).strip().strip('"').strip("'")
 
 GEMINI_API_KEY = get_gemini_api_key()
 
+try:
+    GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+except Exception:
+    GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 def clean_company_name(value):
     """清洗台股、美股及全球代號來源中的公司名稱，避免空白或特殊字元造成顯示異常。"""
