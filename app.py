@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # Gemini 使用 REST API 呼叫，因此不需要額外安裝 google-generativeai 套件。
-# 金鑰請放在 Streamlit Secrets：GEMINI_API_KEY = "你的金鑰"
+# 正式部署請由部署環境注入 GEMINI_API_KEY；GitHub Actions 使用 GitHub Secrets。
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -66,10 +66,27 @@ ETF_CATEGORY_MAP = {
     if code.strip()
 }
 
-# FinMind API 金鑰
-FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
+# 外部 API 設定：環境變數優先，方便由 GitHub Actions Secrets 注入；
+# Streamlit Secrets 僅作本機／Streamlit Cloud 相容備援。
+def get_runtime_secret(*names):
+    for name in names:
+        value = os.environ.get(name, "")
+        if value:
+            return str(value).strip().strip('"').strip("'")
+    try:
+        for name in names:
+            value = st.secrets.get(name, "")
+            if value:
+                return str(value).strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
+
+
+# 支援兩種常見命名，GitHub Secret 建議名稱為 FINMIND_TOKEN。
+FINMIND_TOKEN = get_runtime_secret("FINMIND_TOKEN", "FINMIND_API_KEY")
 FINMIND_CACHE_TTL_SECONDS = 12 * 60 * 60
-# 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
+# 不把金鑰直接寫入程式碼或提交到 GitHub。
 def get_gemini_api_key():
     """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
     def unwrap(value):
@@ -95,7 +112,8 @@ def get_gemini_api_key():
         return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
 
     # 先讀明確的頂層設定；這是 Streamlit Secrets 最穩定的寫法。
-    direct_values = []
+    # GitHub Actions / 部署環境注入的環境變數優先於 Streamlit Secrets。
+    direct_values = [os.environ.get("GEMINI_API_KEY", "")]
     try:
         direct_values.extend([
             st.secrets.get("GEMINI_API_KEY", ""),
@@ -105,7 +123,6 @@ def get_gemini_api_key():
         ])
     except Exception:
         pass
-    direct_values.append(os.environ.get("GEMINI_API_KEY", ""))
     for candidate in direct_values:
         direct_key = unwrap(candidate)
         if direct_key:
@@ -539,31 +556,17 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     valid_stocks = sorted({str(code).strip() for code in stock_codes if re.match(r"^\d{4,6}$", str(code).strip())})
     if not valid_stocks:
         return {}
+    if not FINMIND_TOKEN:
+        print("未設定 FINMIND_TOKEN，略過 FinMind PE/PB 查詢，保留試算表既有估值。")
+        return {}
+    # 防止最新日期含有上千檔成分股時，首次開頁同步送出過多個別請求。
+    # 其餘資料仍會使用「代號」工作表既有的 PE/PB；快取到期後再補查。
+    if len(valid_stocks) > 300:
+        valid_stocks = valid_stocks[:300]
 
-    # 先嘗試一次批次查詢；部分 FinMind 版本不接受沒有 data_id 的請求，
-    # 因此若回傳空資料，再以有限併發補查，兼顧速度與結果完整性。
+    # TaiwanStockPER 的 API 版本通常要求 data_id；不再送出會回 400 的
+    # 無 data_id 批次請求，直接以有限併發查詢，避免無效重試拖慢頁面。
     url = "https://api.finmindtrade.com/api/v4/data"
-    params = {"dataset": "TaiwanStockPER", "start_date": start_date_str, "end_date": date_str}
-    if FINMIND_TOKEN:
-        params["token"] = FINMIND_TOKEN
-    try:
-        response = requests.get(url, params=params, timeout=20)
-        response.raise_for_status()
-        records = response.json().get("data", [])
-        requested = {str(code).strip() for code in stock_codes}
-        result = {}
-        for record in records:
-            code = str(record.get("stock_id", record.get("data_id", ""))).strip()
-            if code not in requested:
-                continue
-            result[code] = {
-                "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
-                "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
-            }
-        if result:
-            return result
-    except Exception as exc:
-        print(f"FinMind 批次估值無結果，改用個股補查：{exc}")
 
     def fetch_one(code):
         one_params = {
@@ -575,7 +578,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
         if FINMIND_TOKEN:
             one_params["token"] = FINMIND_TOKEN
         try:
-            one_response = requests.get(url, params=one_params, timeout=8)
+            one_response = requests.get(url, params=one_params, timeout=6)
             one_response.raise_for_status()
             rows = one_response.json().get("data", [])
             if not rows:
@@ -589,7 +592,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
             return code, None
 
     results = {}
-    with ThreadPoolExecutor(max_workers=12) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(fetch_one, code) for code in valid_stocks]
         for future in as_completed(futures):
             code, value = future.result()
@@ -605,15 +608,24 @@ def fetch_global_valuation_cached(stock_codes):
     全球代號不適用 FinMind 的 TaiwanStockPER，因此另外查詢公開行情欄位；
     查不到時回傳空值，不影響 ETF History 既有資料。
     """
+    blocked_tokens = (
+        "C_", "M_", "DA_", "DR_", "RDI", "PFUR", "FX_", "TX", "2026",
+        "_NTD", "_USD", "_JPY", "_HKD", "_CNY", "_KRW", "_SGD", "_EUR",
+    )
     codes = list(dict.fromkeys(
         str(code).strip() for code in (stock_codes or [])
-        if str(code).strip() and not re.match(r"^\d{4,6}$", str(code).strip())
+        if str(code).strip()
+        and not re.match(r"^\d{4,6}$", str(code).strip())
+        and not any(token in str(code).strip().upper() for token in blocked_tokens)
+        and not re.match(r"^(?:B\d|[A-Z]{1,4}\d{3,}|\d{6}[A-Z])", str(code).strip().upper())
     ))
     if not codes:
         return {}
 
     result = {}
     headers = {"User-Agent": "Mozilla/5.0 ETF-dashboard/1.0"}
+    # Yahoo quote API 在部分部署環境會直接回 401；最多嘗試第一批，
+    # 失敗就安靜返回空值，頁面仍使用「代號」工作表既有 PE/PB。
     for start in range(0, len(codes), 50):
         batch = codes[start:start + 50]
         symbols = []
@@ -634,6 +646,9 @@ def fetch_global_valuation_cached(stock_codes):
                 headers=headers,
                 timeout=20,
             )
+            if response.status_code in {401, 403}:
+                print("全球 PE/PB 來源暫時拒絕請求（401/403），保留試算表既有估值。")
+                return result
             response.raise_for_status()
             quote_rows = response.json().get("quoteResponse", {}).get("result", [])
             for quote in quote_rows:
@@ -649,8 +664,11 @@ def fetch_global_valuation_cached(stock_codes):
                     "name": clean_company_name(quote.get("longName") or quote.get("shortName")),
                     "source": "Yahoo Finance",
                 }
-        except Exception as exc:
-            print(f"全球 PE/PB 批次讀取失敗：{exc}")
+        except requests.RequestException as exc:
+            print(f"全球 PE/PB 來源暫時不可用，保留既有估值：{type(exc).__name__}")
+            return result
+        except Exception:
+            return result
     return result
 
 
@@ -667,6 +685,9 @@ def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
         if re.match(r"^\d{4,6}$", str(code).strip())
     })
     if not valid_stocks:
+        return {}
+    if not FINMIND_TOKEN:
+        print("未設定 FINMIND_TOKEN，略過 FinMind 股利政策查詢，保留既有殖利率。")
         return {}
 
     try:
@@ -688,7 +709,7 @@ def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
         response.raise_for_status()
         records = response.json().get("data", [])
     except Exception as exc:
-        print(f"FinMind 股利政策批次讀取失敗：{exc}")
+        print(f"FinMind 股利政策暫時不可用，保留既有殖利率：{type(exc).__name__}")
         return {}
 
     requested = set(valid_stocks)
@@ -1145,20 +1166,29 @@ def build_gemini_summary(df):
 # 6. 主渲染邏輯
 # ==========================================
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
-    twse_json = json.dumps(twse_live_market, ensure_ascii=False)
-    ticker_json = json.dumps(ticker_map, ensure_ascii=False)
-    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
-    price_history_json = json.dumps(price_history, ensure_ascii=False)
-    etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
+    try:
+        json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
+    except Exception as exc:
+        st.error(f"資料載入失敗，已停止外部估值查詢：{type(exc).__name__}: {exc}")
+        return
+
+    def script_json(value):
+        # 避免公司名稱或外部文字含有 </script> 時截斷 iframe 腳本。
+        return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+    json_data = str(json_data).replace("</", "<\\/")
+    twse_json = script_json(twse_live_market)
+    ticker_json = script_json(ticker_map)
+    etf_name_json = script_json(etf_name_map)
+    price_history_json = script_json(price_history)
+    etf_category_json = script_json(ETF_CATEGORY_MAP)
     try:
         analysis_df = pd.DataFrame(json.loads(json_data))
-        gemini_insight_json = json.dumps(
+        gemini_insight_json = script_json(
             fetch_gemini_insight(build_gemini_summary(analysis_df), get_gemini_api_key()),
-            ensure_ascii=False,
         )
     except Exception as exc:
-        gemini_insight_json = json.dumps(f"Gemini 分析資料準備失敗：{exc}", ensure_ascii=False)
+        gemini_insight_json = script_json(f"Gemini 分析資料準備失敗：{exc}")
 
     html_template = """
     <!DOCTYPE html>
