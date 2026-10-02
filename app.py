@@ -82,7 +82,7 @@ def get_gemini_api_key():
     return str(value).strip() if value else ""
 
 GEMINI_API_KEY = get_gemini_api_key()
-st.write("GEMINI_API_KEY 已讀取：", bool(GEMINI_API_KEY))
+#st.write("GEMINI_API_KEY 已讀取：", bool(GEMINI_API_KEY))
 
 try:
     GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
