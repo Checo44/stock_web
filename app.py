@@ -70,18 +70,19 @@ ETF_CATEGORY_MAP = {
 FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
 def get_gemini_api_key():
-    """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
     try:
-        value = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        value = ""
+        if "GEMINI_API_KEY" in st.secrets:
+            value = st.secrets["GEMINI_API_KEY"]
+            if value:
+                return str(value).strip()
+    except Exception as e:
+        st.error(f"讀取 Streamlit Secrets 失敗：{e}")
 
-    if not value:
-        value = os.environ.get("GEMINI_API_KEY", "")
-
-    return str(value).strip().strip('"').strip("'")
+    value = os.environ.get("GEMINI_API_KEY", "")
+    return str(value).strip() if value else ""
 
 GEMINI_API_KEY = get_gemini_api_key()
+st.write("GEMINI_API_KEY 已讀取：", bool(GEMINI_API_KEY))
 
 try:
     GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
