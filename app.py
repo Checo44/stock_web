@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 
 # Gemini 使用 REST API 呼叫，因此不需要額外安裝 google-generativeai 套件。
-# 正式部署請由部署環境注入 GEMINI_API_KEY；GitHub Actions 使用 GitHub Secrets。
+# 金鑰請放在 Streamlit Secrets：GEMINI_API_KEY = "你的金鑰"
 
 # ==========================================
 # 1. 網頁基本設定與隱藏 Streamlit 原生外框
@@ -66,97 +66,33 @@ ETF_CATEGORY_MAP = {
     if code.strip()
 }
 
-# 外部 API 設定：環境變數優先，方便由 GitHub Actions Secrets 注入；
-# Streamlit Secrets 僅作本機／Streamlit Cloud 相容備援。
-def get_runtime_secret(*names):
-    for name in names:
-        value = os.environ.get(name, "")
-        if value:
-            return str(value).strip().strip('"').strip("'")
-    try:
-        for name in names:
-            value = st.secrets.get(name, "")
-            if value:
-                return str(value).strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ""
-
-
-# 支援兩種常見命名，GitHub Secret 建議名稱為 FINMIND_TOKEN。
-FINMIND_TOKEN = get_runtime_secret("FINMIND_TOKEN", "FINMIND_API_KEY")
-FINMIND_CACHE_TTL_SECONDS = 12 * 60 * 60
-# 不把金鑰直接寫入程式碼或提交到 GitHub。
+# FinMind API 金鑰
+FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
+# 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
 def get_gemini_api_key():
     """從 Streamlit Secrets 讀取 Gemini API 金鑰，環境變數作為備援。"""
-    def unwrap(value):
-        if value is None:
-            return ""
-        if isinstance(value, dict) or hasattr(value, "get"):
-            try:
-                value = value.get("GEMINI_API_KEY") or value.get("gemini_api_key") or value.get("api_key") or ""
-            except Exception:
-                return ""
-        if isinstance(value, str) and value.lstrip().startswith(("{", "'", '"')):
-            try:
-                decoded = json.loads(value)
-                if isinstance(decoded, dict):
-                    value = decoded.get("GEMINI_API_KEY") or decoded.get("gemini_api_key") or decoded.get("api_key") or ""
-            except (json.JSONDecodeError, TypeError):
-                try:
-                    decoded = ast.literal_eval(value)
-                    if isinstance(decoded, dict):
-                        value = decoded.get("GEMINI_API_KEY") or decoded.get("gemini_api_key") or decoded.get("api_key") or ""
-                except (ValueError, SyntaxError):
-                    pass
-        return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
-
-    # 先讀明確的頂層設定；這是 Streamlit Secrets 最穩定的寫法。
-    # GitHub Actions / 部署環境注入的環境變數優先於 Streamlit Secrets。
-    direct_values = [os.environ.get("GEMINI_API_KEY", "")]
     try:
-        direct_values.extend([
-            st.secrets.get("GEMINI_API_KEY", ""),
-            st.secrets.get("gemini_api_key", ""),
-            # 容錯：若從 Markdown/訊息複製時把底線前的反斜線也帶入。
-            st.secrets.get("GEMINI\\_API\\_KEY", ""),
-        ])
-    except Exception:
-        pass
-    for candidate in direct_values:
-        direct_key = unwrap(candidate)
-        if direct_key:
-            return direct_key
-
-    def find_key(container):
-        """同時支援頂層字串、[GEMINI_API_KEY] 區塊及巢狀 Secrets。"""
-        if isinstance(container, str):
-            return container
-        if isinstance(container, dict) or hasattr(container, "items"):
-            try:
-                try:
-                    items = list(container.items())
-                except Exception:
-                    items = list(dict(container).items())
-                for key, child in items:
-                    normalized_key = str(key).strip().replace("\\", "").upper()
-                    if normalized_key in {"GEMINI_API_KEY", "API_KEY"}:
-                        if child:
-                            return child
-                for _, child in items:
-                    found = find_key(child)
-                    if found:
-                        return found
-            except Exception:
-                return ""
-        return ""
-
-    try:
-        secret_value = find_key(st.secrets)
+        secret_value = st.secrets.get("GEMINI_API_KEY", "")
     except Exception:
         secret_value = ""
 
-    return unwrap(secret_value)
+    value = secret_value or os.environ.get("GEMINI_API_KEY", "")
+    if isinstance(value, dict) or hasattr(value, "get"):
+        value = value.get("GEMINI_API_KEY", value.get("api_key", ""))
+    if isinstance(value, str) and value.lstrip().startswith("{"):
+        try:
+            decoded = json.loads(value)
+            if isinstance(decoded, dict):
+                value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
+        except json.JSONDecodeError:
+            # Streamlit Secrets/環境變數有時會把 Python dict 轉成單引號字串。
+            try:
+                decoded = ast.literal_eval(value)
+                if isinstance(decoded, dict):
+                    value = decoded.get("GEMINI_API_KEY", decoded.get("api_key", ""))
+            except (ValueError, SyntaxError):
+                pass
+    return str(value or "").strip().strip('"').strip("'").replace("\\_", "_")
 
 
 GEMINI_API_KEY = get_gemini_api_key()
@@ -170,10 +106,6 @@ def clean_company_name(value):
     if text.lower() in {"nan", "none", "null", "undefined", "n/a", "na", "-"}:
         return ""
     return text
-
-
-def normalise_field_header(value):
-    return re.sub(r"[\s_()（）%％.]", "", str(value or "")).lower()
 
 
 def safe_yield_value(value):
@@ -350,18 +282,17 @@ def fetch_ticker_mapping():
         code_idx, name_idx, industry_idx, yield_idx, per_idx, pbr_idx = None, None, None, None, None, None
         
         for idx, h in enumerate(headers):
-            field = normalise_field_header(h)
-            if field in {"股票代號", "代號", "成分股代號", "商品代號"}:
+            if h in ["股票代號", "代號", "成分股代號", "商品代號"]:
                 code_idx = idx
-            if field in {"公司名稱", "股票名稱", "名稱", "成分股名稱", "商品名稱"}:
+            if h in ["公司名稱", "股票名稱", "名稱", "成分股名稱", "商品名稱"]:
                 name_idx = idx
-            if field in {"產業別", "產業", "行業別", "行業", "industry"}:
+            if h in ["產業別", "產業", "行業別", "行業", "Industry"]:
                 industry_idx = idx
-            if field in {"殖利率", "股利殖利率", "dividendyield", "yield", "yieldpct"}:
+            if h in ["殖利率", "股利殖利率", "殖利率(%)", "Dividend Yield", "yield"]:
                 yield_idx = idx
-            if field in {"本益比", "本益比倍", "per", "pe"}:
+            if h in ["本益比", "本益比(倍)", "PER", "P/E", "pe"]:
                 per_idx = idx
-            if field in {"股價淨值比", "股淨比", "pbr", "pb"}:
+            if h in ["股價淨值比", "股淨比", "PBR", "P/B", "pb"]:
                 pbr_idx = idx
                 
         if code_idx is None: code_idx = 0
@@ -544,7 +475,7 @@ def fetch_etf_name_mapping():
 # ==========================================
 # 3. FinMind PBR/PER 快取與查詢
 # ==========================================
-@st.cache_data(ttl=FINMIND_CACHE_TTL_SECONDS)
+@st.cache_data(ttl=28800)
 def fetch_valuation_weights_cached(stock_codes, date_str):
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d")
@@ -556,17 +487,31 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     valid_stocks = sorted({str(code).strip() for code in stock_codes if re.match(r"^\d{4,6}$", str(code).strip())})
     if not valid_stocks:
         return {}
-    if not FINMIND_TOKEN:
-        print("未設定 FINMIND_TOKEN，略過 FinMind PE/PB 查詢，保留試算表既有估值。")
-        return {}
-    # 防止最新日期含有上千檔成分股時，首次開頁同步送出過多個別請求。
-    # 其餘資料仍會使用「代號」工作表既有的 PE/PB；快取到期後再補查。
-    if len(valid_stocks) > 300:
-        valid_stocks = valid_stocks[:300]
 
-    # TaiwanStockPER 的 API 版本通常要求 data_id；不再送出會回 400 的
-    # 無 data_id 批次請求，直接以有限併發查詢，避免無效重試拖慢頁面。
+    # 先嘗試一次批次查詢；部分 FinMind 版本不接受沒有 data_id 的請求，
+    # 因此若回傳空資料，再以有限併發補查，兼顧速度與結果完整性。
     url = "https://api.finmindtrade.com/api/v4/data"
+    params = {"dataset": "TaiwanStockPER", "start_date": start_date_str, "end_date": date_str}
+    if FINMIND_TOKEN:
+        params["token"] = FINMIND_TOKEN
+    try:
+        response = requests.get(url, params=params, timeout=20)
+        response.raise_for_status()
+        records = response.json().get("data", [])
+        requested = {str(code).strip() for code in stock_codes}
+        result = {}
+        for record in records:
+            code = str(record.get("stock_id", record.get("data_id", ""))).strip()
+            if code not in requested:
+                continue
+            result[code] = {
+                "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
+                "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
+            }
+        if result:
+            return result
+    except Exception as exc:
+        print(f"FinMind 批次估值無結果，改用個股補查：{exc}")
 
     def fetch_one(code):
         one_params = {
@@ -578,7 +523,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
         if FINMIND_TOKEN:
             one_params["token"] = FINMIND_TOKEN
         try:
-            one_response = requests.get(url, params=one_params, timeout=6)
+            one_response = requests.get(url, params=one_params, timeout=8)
             one_response.raise_for_status()
             rows = one_response.json().get("data", [])
             if not rows:
@@ -592,7 +537,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
             return code, None
 
     results = {}
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = [executor.submit(fetch_one, code) for code in valid_stocks]
         for future in as_completed(futures):
             code, value = future.result()
@@ -601,78 +546,7 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     return results
 
 
-@st.cache_data(ttl=FINMIND_CACHE_TTL_SECONDS)
-def fetch_global_valuation_cached(stock_codes):
-    """以 Yahoo Finance 補抓非台股標的的 PE、PB 與公司名稱。
-
-    全球代號不適用 FinMind 的 TaiwanStockPER，因此另外查詢公開行情欄位；
-    查不到時回傳空值，不影響 ETF History 既有資料。
-    """
-    blocked_tokens = (
-        "C_", "M_", "DA_", "DR_", "RDI", "PFUR", "FX_", "TX", "2026",
-        "_NTD", "_USD", "_JPY", "_HKD", "_CNY", "_KRW", "_SGD", "_EUR",
-    )
-    codes = list(dict.fromkeys(
-        str(code).strip() for code in (stock_codes or [])
-        if str(code).strip()
-        and not re.match(r"^\d{4,6}$", str(code).strip())
-        and not any(token in str(code).strip().upper() for token in blocked_tokens)
-        and not re.match(r"^(?:B\d|[A-Z]{1,4}\d{3,}|\d{6}[A-Z])", str(code).strip().upper())
-    ))
-    if not codes:
-        return {}
-
-    result = {}
-    headers = {"User-Agent": "Mozilla/5.0 ETF-dashboard/1.0"}
-    # Yahoo quote API 在部分部署環境會直接回 401；最多嘗試第一批，
-    # 失敗就安靜返回空值，頁面仍使用「代號」工作表既有 PE/PB。
-    for start in range(0, len(codes), 50):
-        batch = codes[start:start + 50]
-        symbols = []
-        symbol_to_code = {}
-        for code in batch:
-            symbol = re.sub(r"\s+(?:US|U[QW]|UN|UP|UD|UR|UF)$", "", code.upper())
-            symbol = symbol.replace(" ", "-")
-            if not symbol:
-                continue
-            symbols.append(symbol)
-            symbol_to_code[symbol.upper()] = code
-        if not symbols:
-            continue
-        try:
-            response = requests.get(
-                "https://query1.finance.yahoo.com/v7/finance/quote",
-                params={"symbols": ",".join(symbols)},
-                headers=headers,
-                timeout=20,
-            )
-            if response.status_code in {401, 403}:
-                print("全球 PE/PB 來源暫時拒絕請求（401/403），保留試算表既有估值。")
-                return result
-            response.raise_for_status()
-            quote_rows = response.json().get("quoteResponse", {}).get("result", [])
-            for quote in quote_rows:
-                symbol = str(quote.get("symbol", "")).upper()
-                original_code = symbol_to_code.get(symbol)
-                if not original_code:
-                    continue
-                pbr = safe_yield_value(quote.get("priceToBook"))
-                per = safe_yield_value(quote.get("trailingPE")) or safe_yield_value(quote.get("forwardPE"))
-                result[canonical_security_key(original_code)] = {
-                    "per": per,
-                    "pbr": pbr,
-                    "name": clean_company_name(quote.get("longName") or quote.get("shortName")),
-                    "source": "Yahoo Finance",
-                }
-        except requests.RequestException as exc:
-            print(f"全球 PE/PB 來源暫時不可用，保留既有估值：{type(exc).__name__}")
-            return result
-        except Exception:
-            return result
-    return result
-
-
-@st.cache_data(ttl=FINMIND_CACHE_TTL_SECONDS)
+@st.cache_data(ttl=28800)
 def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
     """批次讀取 FinMind TaiwanStockDividend，計算近五年平均現金殖利率。
 
@@ -685,9 +559,6 @@ def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
         if re.match(r"^\d{4,6}$", str(code).strip())
     })
     if not valid_stocks:
-        return {}
-    if not FINMIND_TOKEN:
-        print("未設定 FINMIND_TOKEN，略過 FinMind 股利政策查詢，保留既有殖利率。")
         return {}
 
     try:
@@ -709,7 +580,7 @@ def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
         response.raise_for_status()
         records = response.json().get("data", [])
     except Exception as exc:
-        print(f"FinMind 股利政策暫時不可用，保留既有殖利率：{type(exc).__name__}")
+        print(f"FinMind 股利政策批次讀取失敗：{exc}")
         return {}
 
     requested = set(valid_stocks)
@@ -718,25 +589,10 @@ def fetch_dividend_policy_cached(stock_codes, price_map, end_date):
         code = str(record.get("stock_id", record.get("data_id", ""))).strip()
         if code not in requested:
             continue
-        year = str(
-            record.get("year")
-            or record.get("dividend_year")
-            or record.get("announcement_date", "")
-        ).strip()
-        year_match = re.search(r"(20\d{2})", year)
-        year = year_match.group(1) if year_match else ""
+        year = str(record.get("year", record.get("dividend_year", ""))).strip()
         if not year:
             continue
-        cash_value = (
-            record.get("cash_dividend")
-            or record.get("cash_dividend_per_share")
-            or record.get("cash_dividend_earnings")
-            or record.get("cash_earnings")
-            or record.get("CashDividend")
-            or record.get("CashEarnings")
-            or record.get("現金股利")
-            or 0
-        )
+        cash_value = record.get("cash_dividend", record.get("cash_dividend_per_share", record.get("cash_dividend_earnings", 0)))
         cash_dividend = safe_yield_value(cash_value)
         if cash_dividend <= 0:
             continue
@@ -869,23 +725,16 @@ def process_and_standardize(raw_data, ticker_map=None):
         "weight": ["持股權重", "權重", "權重(%)", "持股比例"],
         "volume": ["持有數量", "持有數", "股數", "持有股數", "股數", "持有股數"],
         "price": ["平均成交價格", "成交價格", "平均價格", "單價", "均價", "價格", "Price"],
-        "yield": ["殖利率", "股利殖利率", "殖利率(%)", "殖利率％", "Dividend Yield", "DividendYield", "yield", "yield_pct"],
-        "per": ["本益比", "本益比(倍)", "PER", "P/E", "pe", "trailingPE"],
-        "pbr": ["股價淨值比", "股淨比", "PBR", "P/B", "pb", "priceToBook"]
+        "yield": ["殖利率", "股利殖利率", "殖利率(%)", "Dividend Yield", "yield"],
+        "per": ["本益比", "本益比(倍)", "PER", "P/E", "pe"],
+        "pbr": ["股價淨值比", "股淨比", "PBR", "P/B", "pb"]
     }
     
     rename_dict = {}
     for standard, aliases in alias_map.items():
         for alias in aliases:
-            actual_column = next(
-                (
-                    column for column in df.columns
-                    if column == alias or normalise_field_header(column) == normalise_field_header(alias)
-                ),
-                None,
-            )
-            if actual_column is not None:
-                rename_dict[actual_column] = standard
+            if alias in df.columns:
+                rename_dict[alias] = standard
                 break
                 
     df = df.rename(columns=rename_dict)
@@ -918,7 +767,7 @@ def process_and_standardize(raw_data, ticker_map=None):
     ).fillna(0.0)
 
     if 'yield' in df.columns:
-        df['yield'] = df['yield'].map(safe_yield_value)
+        df['yield'] = pd.to_numeric(df['yield'].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False), errors='coerce').fillna(0.0)
     else:
         df['yield'] = 0.0
 
@@ -1029,29 +878,10 @@ def fetch_backend_data_to_json():
     try:
         latest_date = df['date'].max()
         unique_stocks = df['stock'].unique().tolist()
-        # PE/PB 與殖利率只需要最新持股；避免拿整份多年 History 的所有代號
-        # 逐一呼叫外部 API，造成首頁載入過久或被外部服務限流。
-        latest_stocks = df.loc[df['date'] == latest_date, 'stock'].dropna().unique().tolist()
-        val_map = fetch_valuation_weights_cached(latest_stocks, latest_date)
-        global_val_map = fetch_global_valuation_cached(tuple(latest_stocks))
+        val_map = fetch_valuation_weights_cached(unique_stocks, latest_date)
 
-        def valuation_for(row, field):
-            local_value = safe_yield_value(row.get(field, 0))
-            if local_value > 0:
-                return local_value
-            taiwan_value = safe_yield_value(val_map.get(row['stock'], {}).get(field, 0.0))
-            if taiwan_value > 0:
-                return taiwan_value
-            global_value = global_val_map.get(row.get('security_key', canonical_security_key(row['stock'])), {})
-            return safe_yield_value(global_value.get(field, 0.0))
-
-        df['pbr'] = df.apply(lambda row: valuation_for(row, 'pbr'), axis=1)
-        df['per'] = df.apply(lambda row: valuation_for(row, 'per'), axis=1)
-        for index, row in df.iterrows():
-            if not clean_company_name(row.get('name', '')):
-                global_item = global_val_map.get(row.get('security_key', canonical_security_key(row['stock'])), {})
-                if global_item.get('name'):
-                    df.at[index, 'name'] = global_item['name']
+        df['pbr'] = df.apply(lambda row: row['pbr'] or val_map.get(row['stock'], {}).get("pbr", 0.0), axis=1)
+        df['per'] = df.apply(lambda row: row['per'] or val_map.get(row['stock'], {}).get("per", 0.0), axis=1)
 
         latest_price_map = (
             df[df['date'] == latest_date]
@@ -1060,20 +890,7 @@ def fetch_backend_data_to_json():
             .last()
             .to_dict()
         )
-        # History 若沒有平均成交價，改用「代號」工作表最近收盤價作為殖利率分母。
-        for stock_code in unique_stocks:
-            if safe_yield_value(latest_price_map.get(stock_code, 0)) > 0:
-                continue
-            history_prices = price_history.get(stock_code, {})
-            if not history_prices:
-                history_key = next(
-                    (key for key in price_history if canonical_security_key(key) == canonical_security_key(stock_code)),
-                    None,
-                )
-                history_prices = price_history.get(history_key, {}) if history_key else {}
-            if history_prices:
-                latest_price_map[stock_code] = history_prices[sorted(history_prices)[-1]]
-        dividend_map = fetch_dividend_policy_cached(latest_stocks, latest_price_map, latest_date)
+        dividend_map = fetch_dividend_policy_cached(unique_stocks, latest_price_map, latest_date)
         df['dividend_yield_5y'] = df['stock'].map(
             lambda code: dividend_map.get(code, {}).get('avg_yield_5y', 0.0)
         ).fillna(0.0)
@@ -1166,29 +983,20 @@ def build_gemini_summary(df):
 # 6. 主渲染邏輯
 # ==========================================
 def main():
-    try:
-        json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
-    except Exception as exc:
-        st.error(f"資料載入失敗，已停止外部估值查詢：{type(exc).__name__}: {exc}")
-        return
-
-    def script_json(value):
-        # 避免公司名稱或外部文字含有 </script> 時截斷 iframe 腳本。
-        return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
-
-    json_data = str(json_data).replace("</", "<\\/")
-    twse_json = script_json(twse_live_market)
-    ticker_json = script_json(ticker_map)
-    etf_name_json = script_json(etf_name_map)
-    price_history_json = script_json(price_history)
-    etf_category_json = script_json(ETF_CATEGORY_MAP)
+    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
+    twse_json = json.dumps(twse_live_market, ensure_ascii=False)
+    ticker_json = json.dumps(ticker_map, ensure_ascii=False)
+    etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
+    price_history_json = json.dumps(price_history, ensure_ascii=False)
+    etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
     try:
         analysis_df = pd.DataFrame(json.loads(json_data))
-        gemini_insight_json = script_json(
+        gemini_insight_json = json.dumps(
             fetch_gemini_insight(build_gemini_summary(analysis_df), get_gemini_api_key()),
+            ensure_ascii=False,
         )
     except Exception as exc:
-        gemini_insight_json = script_json(f"Gemini 分析資料準備失敗：{exc}")
+        gemini_insight_json = json.dumps(f"Gemini 分析資料準備失敗：{exc}", ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -1924,7 +1732,6 @@ def main():
                               <th>股票名稱</th>
                               <th class="text-end">持股權重</th>
                               <th class="text-end">持股股數</th>
-                              <th class="text-end">殖利率</th>
                               <th class="text-end">本益比</th>
                               <th class="text-end">股淨比</th>
                             </tr>
@@ -1999,7 +1806,7 @@ def main():
                           <th>股票標的</th>
                           <th>異動屬性</th>
                           <th class="text-end">股數 / 股數增減變動 (權重異動)</th>
-                          <th class="px-4">操作連續性（最近相同方向）</th>
+                          <th class="px-4">經理人連續操作動向</th>
                         </tr>
                       </thead>
                       <tbody id="changeTableBody"></tbody>
@@ -2472,13 +2279,11 @@ def main():
                 <div class="col-md-3"><label class="form-label small fw-bold">想看的分類</label><select id="beginnerCategory" class="form-select"><option value="all">全部分類</option><option value="主動型">主動型</option><option value="高息型">高息型</option><option value="主題型">主題型</option><option value="海外型">海外型</option><option value="市值型">市值型</option></select></div>
                 <div class="col-md-3"><label class="form-label small fw-bold">最低五年平均殖利率</label><select id="beginnerYield" class="form-select"><option value="0">不限</option><option value="2">至少 2%</option><option value="4">至少 4%</option><option value="6">至少 6%</option></select></div>
                 <div class="col-md-3"><label class="form-label small fw-bold">前十大權重上限</label><select id="beginnerConcentration" class="form-select"><option value="100">不限</option><option value="60">60% 以下</option><option value="45">45% 以下</option><option value="35">35% 以下</option></select></div>
-                <div class="col-md-3"><label class="form-label small fw-bold">選擇方向</label><select id="beginnerGoal" class="form-select"><option value="balanced">均衡入門</option><option value="dividend">現金流優先</option><option value="growth">報酬成長優先</option><option value="diversified">分散風險優先</option></select></div>
                 <div class="col-md-3"><button class="btn btn-success w-100" onclick="renderBeginnerFinder()"><i class="bi bi-search me-1"></i>開始篩選</button></div>
               </div>
-              <div class="small text-muted mt-3"><i class="bi bi-info-circle me-1"></i>分數會依「選擇方向」調整權重；先看符合條件的 ETF，再點「查看單檔」確認費用、持股與風險。</div>
             </div>
             <div class="row g-3 mb-4" id="beginnerKpiCards"></div>
-            <div class="card p-3"><div class="table-responsive" style="max-height: 680px; overflow:auto;"><table class="table table-hover align-middle"><thead><tr><th>ETF</th><th>分類</th><th class="text-end">篩選分數</th><th class="text-end">五年平均殖利率</th><th class="text-end">前十大權重</th><th class="text-end">20日報酬</th><th>適合先了解的原因</th><th></th></tr></thead><tbody id="beginnerFinderBody"></tbody></table></div></div>
+            <div class="card p-3"><div class="table-responsive" style="max-height: 680px; overflow:auto;"><table class="table table-hover align-middle"><thead><tr><th>ETF</th><th>分類</th><th class="text-end">篩選分數</th><th class="text-end">五年平均殖利率</th><th class="text-end">前十大權重</th><th class="text-end">20日報酬</th><th>適合先了解的原因</th></tr></thead><tbody id="beginnerFinderBody"></tbody></table></div></div>
           </div>
 
         </div>
@@ -2618,36 +2423,13 @@ def main():
         let stockCategoryChartInstance = null;
         let etfHoldingChangeChartInstance = null;
 
-        function showDashboardError(message) {
-            const loading = document.getElementById('loading');
-            if (loading) loading.style.display = 'none';
-            let box = document.getElementById('dashboardRuntimeError');
-            if (!box) {
-                box = document.createElement('div');
-                box.id = 'dashboardRuntimeError';
-                box.style.cssText = 'margin:24px;padding:20px;border:1px solid #fecaca;border-radius:10px;background:#fff1f2;color:#991b1b;font-family:Arial,sans-serif;';
-                document.body.prepend(box);
-            }
-            box.innerHTML = `<b>頁面載入失敗</b><div style="margin-top:8px;white-space:pre-wrap;">${String(message || '未知錯誤')}</div><div style="margin-top:8px;color:#64748b;">請重新整理；若持續發生，請提供這段錯誤訊息。</div>`;
-        }
-
-        window.addEventListener('error', function(event) {
-            showDashboardError(event.error?.stack || event.message || 'JavaScript 執行錯誤');
-        });
-        window.addEventListener('unhandledrejection', function(event) {
-            showDashboardError(event.reason?.stack || event.reason || '非同步資料載入錯誤');
-        });
         window.onload = function() {
-            try {
-                document.getElementById('loading').style.display = 'none';
-                if (!globalRawData || globalRawData.length === 0) {
-                    showDashboardError('後端未成功載入歷史數據，請確認試算表名稱與結構。');
-                    return;
-                }
-                initDashboard();
-            } catch (error) {
-                showDashboardError(error?.stack || error?.message || error);
+            document.getElementById('loading').style.display = 'none';
+            if (!globalRawData || globalRawData.length === 0) {
+                alert("後端未成功載入歷史數據，請確認試算表名稱與結構。");
+                return;
             }
+            initDashboard();
         };
 
         function switchTab(contentId, tabId) {
@@ -2828,7 +2610,6 @@ def main():
             const category = document.getElementById('beginnerCategory')?.value || 'all';
             const minYield = toNumber(document.getElementById('beginnerYield')?.value || 0);
             const maxConcentration = toNumber(document.getElementById('beginnerConcentration')?.value || 100);
-            const goal = document.getElementById('beginnerGoal')?.value || 'balanced';
             const codes = sortEtfCodes([...new Set(globalRawData.map(row => row.etf))])
                 .filter(code => category === 'all' || getEtfCategory(code) === category);
             const candidates = codes.map(code => {
@@ -2842,14 +2623,7 @@ def main():
                 const return20 = performance.periods[20];
                 const meetsYield = weightedYield >= minYield;
                 const meetsConcentration = top10 <= maxConcentration;
-                const positiveReturn = return20 !== null && return20 >= 0;
-                const score = goal === 'dividend'
-                    ? (meetsYield ? 2 : 0) + (positiveReturn ? 1 : 0)
-                    : goal === 'growth'
-                        ? (positiveReturn ? 2 : 0) + (meetsConcentration ? 1 : 0)
-                        : goal === 'diversified'
-                            ? (meetsConcentration ? 2 : 0) + (meetsYield ? 1 : 0)
-                            : (meetsYield ? 1 : 0) + (meetsConcentration ? 1 : 0) + (positiveReturn ? 1 : 0);
+                const score = (meetsYield ? 1 : 0) + (meetsConcentration ? 1 : 0) + (return20 !== null && return20 >= 0 ? 1 : 0);
                 const reasons = [];
                 if (meetsYield && minYield > 0) reasons.push('殖利率達門檻');
                 if (meetsConcentration && maxConcentration < 100) reasons.push('前十大較分散');
@@ -2867,8 +2641,8 @@ def main():
             document.getElementById('beginnerFinderBody').innerHTML = candidates.map(item => {
                 const returnText = item.return20 === null ? '-' : `${item.return20 >= 0 ? '+' : ''}${item.return20.toFixed(2)}%`;
                 const returnClass = item.return20 > 0 ? 'text-danger' : (item.return20 < 0 ? 'text-success' : 'text-secondary');
-                return `<tr><td class="font-monospace fw-bold">${item.code} <span class="text-muted small">${getEtfName(item.code)}</span></td><td>${categoryBadgeHtml(item.category)}</td><td class="text-end"><span class="badge bg-primary">${item.score} / 3</span></td><td class="text-end text-success fw-bold">${item.yield.toFixed(2)}%</td><td class="text-end">${item.top10.toFixed(2)}%</td><td class="text-end fw-bold ${returnClass}">${returnText}</td><td class="small text-muted">${item.reason}</td><td class="text-end"><button class="btn btn-sm btn-outline-primary" onclick="selectEtf('${item.code}'); switchTab('content-a','tab-a')">查看單檔</button></td></tr>`;
-            }).join('') || '<tr><td colspan="8" class="text-center text-muted py-4">目前沒有符合條件的 ETF，請放寬篩選條件。</td></tr>';
+                return `<tr><td class="font-monospace fw-bold">${item.code} <span class="text-muted small">${getEtfName(item.code)}</span></td><td>${categoryBadgeHtml(item.category)}</td><td class="text-end"><span class="badge bg-primary">${item.score} / 3</span></td><td class="text-end text-success fw-bold">${item.yield.toFixed(2)}%</td><td class="text-end">${item.top10.toFixed(2)}%</td><td class="text-end fw-bold ${returnClass}">${returnText}</td><td class="small text-muted">${item.reason}</td></tr>`;
+            }).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">目前沒有符合條件的 ETF，請放寬篩選條件。</td></tr>';
         }
 
         function renderOverlapAnalysis() {
@@ -3568,20 +3342,16 @@ def main():
             let html = filtered.map(r => {
                 let perText = r.per && Number(r.per) > 0 ? Number(r.per).toFixed(2) : "-";
                 let pbrText = r.pbr && Number(r.pbr) > 0 ? Number(r.pbr).toFixed(2) : "-";
-                let yieldText = r.dividend_yield_5y && Number(r.dividend_yield_5y) > 0
-                    ? `${Number(r.dividend_yield_5y).toFixed(2)}%`
-                    : (r.yield && Number(r.yield) > 0 ? `${Number(r.yield).toFixed(2)}%` : "-");
                 return `<tr>
                     <td class="font-monospace fw-bold">${r.stock}</td>
                     <td class="fw-bold">${r.name || r.stock} <span class="text-muted small">(${r.industry || '未分類'})</span></td>
                     <td class="text-end font-monospace fw-bold text-primary">${toNumber(r.weight).toFixed(2)}%</td>
                     <td class="text-end font-monospace">${toNumber(r.volume).toLocaleString()}</td>
-                    <td class="text-end font-monospace text-success">${yieldText}</td>
                     <td class="text-end font-monospace">${perText}</td>
                     <td class="text-end font-monospace">${pbrText}</td>
                 </tr>`;
             }).join('');
-            document.getElementById('stockTableBody').innerHTML = html || '<tr><td colspan="7" class="text-center text-muted">無符合條件之股票明細</td></tr>';
+            document.getElementById('stockTableBody').innerHTML = html || '<tr><td colspan="6" class="text-center text-muted">無符合條件之股票明細</td></tr>';
         }
 
         function clearIndustryFilter() {
@@ -3876,21 +3646,21 @@ def main():
 
                 if (t.type === 'buy') {
                     if (t.days > 1) {
-                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-graph-up-arrow me-1"></i>連續加碼 ${t.days} 個交易日｜累計 +${t.vol.toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-graph-up-arrow me-1"></i>連買 ${t.days} 天 (+${t.vol.toLocaleString()} ${item.unit})</span>`;
                     } else if (item.natureOrder === 1) {
-                        trendBadge = `<span class="badge-nature-new-pill"><i class="bi bi-plus-circle-fill me-1"></i>新建倉｜本次 +${item.diffVol.toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-nature-new-pill"><i class="bi bi-plus-circle-fill me-1"></i>首日建倉 (+${item.diffVol.toLocaleString()} ${item.unit})</span>`;
                     } else {
-                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-cart-plus-fill me-1"></i>單日加碼｜+${Math.abs(t.vol).toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-trend-buy"><i class="bi bi-cart-plus-fill me-1"></i>加碼買進 1 天 (+${t.vol.toLocaleString()} ${item.unit})</span>`;
                     }
                 } else if (t.type === 'sell') {
                     if (t.days > 1 && item.natureOrder === 4) {
-                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連續減持 ${t.days} 個交易日｜最後清倉剔除</span>`;
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連賣 ${t.days} 天 (累積清倉)</span>`;
                     } else if (t.days > 1) {
-                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連續減持 ${t.days} 個交易日｜累計 -${Math.abs(t.vol).toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-graph-down-arrow me-1"></i>連賣 ${t.days} 天 (${t.vol.toLocaleString()} ${item.unit})</span>`;
                     } else if (item.natureOrder === 4) {
-                        trendBadge = `<span class="badge-nature-delete-pill"><i class="bi bi-dash-circle-fill me-1"></i>清倉剔除｜本次 -${Math.abs(item.diffVol).toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-nature-delete-pill"><i class="bi bi-dash-circle-fill me-1"></i>單日清倉剔除 (${item.diffVol.toLocaleString()} ${item.unit})</span>`;
                     } else {
-                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-cart-dash-fill me-1"></i>單日減持｜-${Math.abs(t.vol).toLocaleString()} ${item.unit}</span>`;
+                        trendBadge = `<span class="badge-trend-sell"><i class="bi bi-cart-dash-fill me-1"></i>減持賣出 1 天 (${t.vol.toLocaleString()} ${item.unit})</span>`;
                     }
                 } else {
                     trendBadge = `<span class="badge bg-light text-secondary border"><i class="bi bi-dash me-1"></i>無顯著連續動向</span>`;
@@ -4402,23 +4172,17 @@ def main():
             let stockStats = {};
             let activeOldRows = oldRows.filter(r => isActiveEtf(r.etf));
             let activeNewRows = newRows.filter(r => isActiveEtf(r.etf));
-            let allStocks = [...new Set([
-                ...activeOldRows.map(r => getRowSecurityKey(r)),
-                ...activeNewRows.map(r => getRowSecurityKey(r))
-            ])];
+            let allStocks = [...new Set([...activeOldRows.map(r => r.stock), ...activeNewRows.map(r => r.stock)])];
 
-            allStocks.forEach(securityKey => {
-                let sample = activeNewRows.find(x => getRowSecurityKey(x) === securityKey) || activeOldRows.find(x => getRowSecurityKey(x) === securityKey);
+            allStocks.forEach(sCode => {
+                let sample = activeNewRows.find(x => x.stock === sCode) || activeOldRows.find(x => x.stock === sCode);
                 if (!sample || !isNormalStock(sample.stock, sample.name)) return;
 
-                let sCode = sample.stock;
                 let sName = sample.name || (tickerMappingData[sCode] ? tickerMappingData[sCode].name : sCode);
                 let isDomestic = /^\\d{4,6}$/.test(sCode.trim());
 
-                let oldMatches = activeOldRows.filter(x => getRowSecurityKey(x) === securityKey);
-                let newMatches = activeNewRows.filter(x => getRowSecurityKey(x) === securityKey);
-                let oldVolSum = oldMatches.reduce((acc, r) => acc + toNumber(r.volume), 0);
-                let newVolSum = newMatches.reduce((acc, r) => acc + toNumber(r.volume), 0);
+                let oldVolSum = activeOldRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
+                let newVolSum = activeNewRows.filter(x => x.stock === sCode).reduce((acc, r) => acc + toNumber(r.volume), 0);
                 let diffVol = newVolSum - oldVolSum;
 
                 if (diffVol === 0) return;
@@ -4430,19 +4194,13 @@ def main():
 
                 let estAmount = diffVol * price;
 
-                let impactedRows = [...oldMatches, ...newMatches];
-                let impactedEtfs = [...new Set(impactedRows.map(r => r.etf))];
-                stockStats[securityKey] = {
+                stockStats[sCode] = {
                     code: sCode,
                     name: sName,
-                    securityKey: securityKey,
                     isDomestic: isDomestic,
                     diffVol: diffVol,
                     price: price,
-                    estAmount: estAmount,
-                    impactedEtfs: impactedEtfs.length,
-                    etfCodes: impactedEtfs,
-                    relativePct: oldVolSum ? (diffVol / Math.abs(oldVolSum)) * 100 : null
+                    estAmount: estAmount
                 };
             });
 
@@ -4473,14 +4231,14 @@ def main():
                     if (isVol) {
                         return `<tr>
                             <td><span class="rank-medal ${medalClass}">${idx+1}</span></td>
-                            <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span><div class="small text-muted">${item.impactedEtfs} 檔主動型 ETF${item.relativePct === null ? '' : `｜持有量 ${item.relativePct >= 0 ? '+' : ''}${item.relativePct.toFixed(1)}%`}</div></td>
+                            <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span></td>
                             <td class="text-end font-monospace fw-bold ${volColor}">${volText}</td>
                             <td class="text-end font-monospace">${amtText}</td>
                         </tr>`;
                     } else {
                         return `<tr>
                             <td><span class="rank-medal ${medalClass}">${idx+1}</span></td>
-                            <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span><div class="small text-muted">${item.impactedEtfs} 檔主動型 ETF${item.relativePct === null ? '' : `｜持有量 ${item.relativePct >= 0 ? '+' : ''}${item.relativePct.toFixed(1)}%`}</div></td>
+                            <td class="fw-bold">${item.code} <span class="text-muted small ms-1">${item.name}</span></td>
                             <td class="text-end font-monospace fw-bold ${volColor}">${amtText}</td>
                             <td class="text-end font-monospace">${volText}</td>
                         </tr>`;
@@ -4501,13 +4259,11 @@ def main():
             const sellStocks = statsArr.filter(item => item.diffVol < 0).length;
             const netVolume = statsArr.reduce((sum, item) => sum + item.diffVol, 0);
             const netAmount = statsArr.reduce((sum, item) => sum + (item.estAmount || 0), 0);
-            const affectedEtfs = new Set(statsArr.flatMap(item => item.etfCodes || [])).size;
             document.getElementById('heatSummary').innerHTML = `
                 <div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">主動型異動個股</div><div class="meta-value">${statsArr.length.toLocaleString()}</div></div></div>
                 <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#dc2626;"><div class="meta-label">淨增加個股</div><div class="meta-value text-danger">${buyStocks}</div></div></div>
                 <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#16a34a;"><div class="meta-label">淨減少個股</div><div class="meta-value text-success">${sellStocks}</div></div></div>
-                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#7c3aed;"><div class="meta-label">估算淨金額</div><div class="meta-value">${(netAmount / 100000000).toFixed(2)} 億</div><div class="small text-muted">淨數量 ${netVolume.toLocaleString()}</div></div></div>
-                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#0891b2;"><div class="meta-label">受影響主動型 ETF</div><div class="meta-value">${affectedEtfs}</div><div class="small text-muted">${dOld} → ${dNew}</div></div></div>`;
+                <div class="col-6 col-xl-3"><div class="meta-card" style="border-left-color:#7c3aed;"><div class="meta-label">估算淨金額</div><div class="meta-value">${(netAmount / 100000000).toFixed(2)} 億</div><div class="small text-muted">淨數量 ${netVolume.toLocaleString()}</div></div></div>`;
         }
 
         function renderCompareMatrix() {
@@ -4705,5 +4461,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
