@@ -29,7 +29,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install crawler dependencies
-        run: python -m pip install --upgrade requests pandas
+        run: python -m pip install --upgrade requests pandas gspread google-auth
 
       - name: Generate JSON data for app.py
         env:
@@ -66,6 +66,11 @@ jobs:
                   raise SystemExit(f"{filename} contains no rows; refusing to publish empty data")
               print(f"{filename}: {len(rows)} rows, schema OK")
           PY
+
+      - name: Publish crawler data to Google Sheets
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python -u publish_crawler_data_to_sheets.py
 
       - name: Commit updated JSON files
         run: |
