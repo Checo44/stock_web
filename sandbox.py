@@ -979,17 +979,49 @@ def build_gemini_summary(df):
 # 6. 主渲染邏輯
 # ==========================================
 
+CRAWLER_SHEETS = {
+    "discount": ("ETF折溢價", "data"),
+    "dividend": ("ETF除權息", "events"),
+    "institutional": ("三大法人", "data"),
+    "shares_flow": ("ETF資金流向", "data"),
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_crawler_sheet_payload(worksheet_title, root_key):
+    """從 Google Sheets 還原 metadata 與 JSON 明細列。"""
+    if not sh:
+        return None, "Google Sheets 尚未連線。"
+    try:
+        values = sh.worksheet(worksheet_title).get_all_values()
+        if not values or values[0][:2] != ["record_type", "payload_json"]:
+            return None, f"工作表「{worksheet_title}」格式不符。"
+
+        metadata = {}
+        records = []
+        for row in values[1:]:
+            if len(row) < 2 or not row[1].strip():
+                continue
+            parsed = json.loads(row[1])
+            if row[0] == "meta" and isinstance(parsed, dict):
+                metadata = parsed
+            elif row[0] == "data" and isinstance(parsed, dict):
+                records.append(parsed)
+
+        return {**metadata, root_key: records}, None
+    except Exception as exc:
+        return None, f"讀取工作表「{worksheet_title}」失敗：{exc}"
+
+
 def load_crawler_data():
-    """
-    載入爬蟲輸出的標準 JSON；爬蟲預設將 JSON 寫在同一個程式資料夾，
-    方便 app.py 在本機與部署環境直接讀取。
-    """
+    """優先從 Google Sheets 載入爬蟲資料，失敗時使用本機 JSON 備援。"""
     filenames = {
         "discount": "etf_discount_premium.json",
         "dividend": "etf_dividend_calendar.json",
         "institutional": "institutional_investors.json",
         "shares_flow": "etf_shares_flow.json",
     }
+    root_keys = {key: config[1] for key, config in CRAWLER_SHEETS.items()}
     app_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
     cwd = Path.cwd()
     base_dirs = list(dict.fromkeys([
@@ -1000,18 +1032,40 @@ def load_crawler_data():
         Path(r"C:\Users\user\Desktop\1016"),
     ]))
     results = {}
+    missing = []
+    sheet_failures = []
     for key, fname in filenames.items():
-        data = None
+        worksheet_title, root_key = CRAWLER_SHEETS[key]
+        data, sheet_error = fetch_crawler_sheet_payload(worksheet_title, root_key)
+        if data is None or not isinstance(data.get(root_keys[key]), list):
+            sheet_failures.append(f"{worksheet_title}（{sheet_error or '資料格式不符'}）")
+            data = None
         for bdir in base_dirs:
+            if data is not None:
+                break
             p = bdir / fname
             if p.exists():
                 try:
                     with open(p, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    break
+                        local_data = json.load(f)
+                    if isinstance(local_data, dict) and isinstance(local_data.get(root_keys[key]), list):
+                        data = local_data
+                    else:
+                        print(f"本機 JSON 格式不符，略過：{p}")
                 except Exception as exc:
                     print(f"讀取 {p} 失敗: {exc}")
+        if data is None:
+            missing.append(fname)
         results[key] = data if data is not None else {}
+    if missing:
+        st.warning(
+            f"Google Sheets 與本機備援都沒有可用資料：{', '.join(missing)}。"
+            "請確認試算表工作表、Google 憑證，以及 GitHub Actions 的 GOOGLE_CREDENTIALS Secret。"
+        )
+    elif sheet_failures:
+        st.warning(
+            f"部分 Google Sheets 工作表讀取失敗（{'; '.join(sheet_failures)}），目前顯示本機 JSON 備援資料。"
+        )
     return (
         results["discount"],
         results["dividend"],
