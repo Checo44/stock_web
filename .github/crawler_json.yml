@@ -1,0 +1,80 @@
+name: Refresh ETF crawler JSON
+
+on:
+  schedule:
+    # GitHub Actions uses UTC; 10:45 UTC is 18:45 in Taiwan.
+    - cron: "45 10 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-etf-crawler-json
+  cancel-in-progress: false
+
+jobs:
+  refresh-json:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install crawler dependencies
+        run: python -m pip install --upgrade requests pandas
+
+      - name: Generate JSON data for app.py
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -u etf_discount_premium.py
+          python -u etf_dividend.py
+          python -u institutional_investors.py
+          python -u etf_shares_flow.py
+
+      - name: Validate app.py JSON files
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          required = {
+              "etf_discount_premium.json": ("data", ("code", "trade_price", "nav", "ratio")),
+              "etf_dividend_calendar.json": ("events", ("code", "ex_date", "last_buy_date", "cash_dividend_str")),
+              "institutional_investors.json": ("data", ("code", "foreign_lots", "trust_lots", "dealer_lots", "total_lots")),
+              "etf_shares_flow.json": ("data", ("code", "total_lots", "aum_billion", "net_flow_billion")),
+          }
+          for filename, (root_key, row_keys) in required.items():
+              path = Path(filename)
+              if not path.is_file():
+                  raise SystemExit(f"Missing crawler output: {filename}")
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              rows = payload.get(root_key)
+              if not isinstance(rows, list):
+                  raise SystemExit(f"{filename} must contain a '{root_key}' list")
+              if rows and not all(key in rows[0] for key in row_keys):
+                  raise SystemExit(f"{filename} row schema does not match app.py")
+              if not rows and filename != "etf_dividend_calendar.json":
+                  raise SystemExit(f"{filename} contains no rows; refusing to publish empty data")
+              print(f"{filename}: {len(rows)} rows, schema OK")
+          PY
+
+      - name: Commit updated JSON files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add etf_discount_premium.json etf_dividend_calendar.json institutional_investors.json etf_shares_flow.json
+          if git diff --cached --quiet; then
+            echo "Crawler JSON is unchanged."
+          else
+            git commit -m "Refresh ETF crawler JSON"
+            git push
+          fi
