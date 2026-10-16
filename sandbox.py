@@ -979,10 +979,10 @@ def build_gemini_summary(df):
 # 6. 主渲染邏輯
 # ==========================================
 
-def load_1016_crawler_data():
+def load_crawler_data():
     """
-    載入 1016 資料夾之即時折溢價、配息行事曆、三大法人買賣超、發行單位數與資金流向資料。
-    優先順序：目前目錄 -> app.py 所在目錄 -> C:/Users/user/Desktop/1016
+    載入爬蟲輸出的標準 JSON；爬蟲預設將 JSON 寫在同一個程式資料夾，
+    方便 app.py 在本機與部署環境直接讀取。
     """
     filenames = {
         "discount": "etf_discount_premium.json",
@@ -990,11 +990,15 @@ def load_1016_crawler_data():
         "institutional": "institutional_investors.json",
         "shares_flow": "etf_shares_flow.json",
     }
-    base_dirs = [
-        Path.cwd(),
-        Path(__file__).resolve().parent if "__file__" in globals() else Path("."),
+    app_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    cwd = Path.cwd()
+    base_dirs = list(dict.fromkeys([
+        app_dir,
+        app_dir / "1016",
+        cwd,
+        cwd / "1016",
         Path(r"C:\Users\user\Desktop\1016"),
-    ]
+    ]))
     results = {}
     for key, fname in filenames.items():
         data = None
@@ -1022,7 +1026,7 @@ def main():
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
     price_history_json = json.dumps(price_history, ensure_ascii=False)
     etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
-    discount_data, dividend_data, institutional_data, shares_flow_data = load_1016_crawler_data()
+    discount_data, dividend_data, institutional_data, shares_flow_data = load_crawler_data()
     discount_json = json.dumps(discount_data, ensure_ascii=False)
     dividend_json = json.dumps(dividend_data, ensure_ascii=False)
     institutional_json = json.dumps(institutional_data, ensure_ascii=False)
