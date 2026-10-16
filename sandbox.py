@@ -197,7 +197,12 @@ def get_sheets_client():
             except Exception as exc:
                 errors.append(f"{json_path} 無法使用：{exc}")
 
-    detail = " | ".join(errors) if errors else "找不到 GOOGLE_CREDENTIALS、gcp_service_account 或頂層 service account Secrets。"
+    detail = " | ".join(errors) if errors else (
+        "找不到 GOOGLE_CREDENTIALS、gcp_service_account 或頂層 service account Secrets。"
+        "若部署於 Streamlit Cloud，請在 App 設定的 Secrets 加入 [gcp_service_account] 區塊，"
+        "填入 service account JSON 欄位，並將該服務帳戶 Email 加入試算表共用名單。"
+        "也可使用 GOOGLE_CREDENTIALS Secret 儲存完整 JSON；請勿將憑證提交至 GitHub。"
+    )
     print("Google 憑證檢查結果：" + detail)
     st.error(f"Google 憑證載入失敗：{detail}")
     return None
@@ -1383,6 +1388,10 @@ def main():
         <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status">
           <span class="visually-hidden">Loading...</span>
         </div>
+      </div>
+
+      <div class="alert alert-warning mx-3 mt-3 mb-0" id="historyDataWarning" style="display:none;">
+        歷史 ETF 持股資料目前無法載入；請設定 Google 試算表憑證與共用權限。即時折溢價、除權息行事曆、三大法人及 ETF 資金流向頁仍可使用。
       </div>
 
       <div class="container-fluid py-4 px-md-5">
@@ -2933,8 +2942,8 @@ def main():
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
             if (!globalRawData || globalRawData.length === 0) {
-                alert("後端未成功載入歷史數據，請確認試算表名稱與結構。");
-                return;
+                const warning = document.getElementById('historyDataWarning');
+                if (warning) warning.style.display = 'block';
             }
             initDashboard();
         };
