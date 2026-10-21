@@ -197,7 +197,12 @@ def get_sheets_client():
             except Exception as exc:
                 errors.append(f"{json_path} 無法使用：{exc}")
 
-    detail = " | ".join(errors) if errors else "找不到 GOOGLE_CREDENTIALS、gcp_service_account 或頂層 service account Secrets。"
+    detail = " | ".join(errors) if errors else (
+        "找不到 GOOGLE_CREDENTIALS、gcp_service_account 或頂層 service account Secrets。"
+        "若部署於 Streamlit Cloud，請在 App 設定的 Secrets 加入 [gcp_service_account] 區塊，"
+        "填入 service account JSON 欄位，並將該服務帳戶 Email 加入試算表共用名單。"
+        "也可使用 GOOGLE_CREDENTIALS Secret 儲存完整 JSON；請勿將憑證提交至 GitHub。"
+    )
     print("Google 憑證檢查結果：" + detail)
     st.error(f"Google 憑證載入失敗：{detail}")
     return None
@@ -973,6 +978,101 @@ def build_gemini_summary(df):
 # ==========================================
 # 6. 主渲染邏輯
 # ==========================================
+
+CRAWLER_SHEETS = {
+    "discount": ("ETF折溢價", "data"),
+    "dividend": ("ETF除權息", "events"),
+    "institutional": ("三大法人", "data"),
+    "shares_flow": ("ETF資金流向", "data"),
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_crawler_sheet_payload(worksheet_title, root_key):
+    """從 Google Sheets 還原 metadata 與 JSON 明細列。"""
+    if not sh:
+        return None, "Google Sheets 尚未連線。"
+    try:
+        values = sh.worksheet(worksheet_title).get_all_values()
+        if not values or values[0][:2] != ["record_type", "payload_json"]:
+            return None, f"工作表「{worksheet_title}」格式不符。"
+
+        metadata = {}
+        records = []
+        for row in values[1:]:
+            if len(row) < 2 or not row[1].strip():
+                continue
+            parsed = json.loads(row[1])
+            if row[0] == "meta" and isinstance(parsed, dict):
+                metadata = parsed
+            elif row[0] == "data" and isinstance(parsed, dict):
+                records.append(parsed)
+
+        return {**metadata, root_key: records}, None
+    except Exception as exc:
+        return None, f"讀取工作表「{worksheet_title}」失敗：{exc}"
+
+
+def load_crawler_data():
+    """優先從 Google Sheets 載入爬蟲資料，失敗時使用本機 JSON 備援。"""
+    filenames = {
+        "discount": "etf_discount_premium.json",
+        "dividend": "etf_dividend_calendar.json",
+        "institutional": "institutional_investors.json",
+        "shares_flow": "etf_shares_flow.json",
+    }
+    root_keys = {key: config[1] for key, config in CRAWLER_SHEETS.items()}
+    app_dir = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    cwd = Path.cwd()
+    base_dirs = list(dict.fromkeys([
+        app_dir,
+        app_dir / "1016",
+        cwd,
+        cwd / "1016",
+        Path(r"C:\Users\user\Desktop\1016"),
+    ]))
+    results = {}
+    missing = []
+    sheet_failures = []
+    for key, fname in filenames.items():
+        worksheet_title, root_key = CRAWLER_SHEETS[key]
+        data, sheet_error = fetch_crawler_sheet_payload(worksheet_title, root_key)
+        if data is None or not isinstance(data.get(root_keys[key]), list):
+            sheet_failures.append(f"{worksheet_title}（{sheet_error or '資料格式不符'}）")
+            data = None
+        for bdir in base_dirs:
+            if data is not None:
+                break
+            p = bdir / fname
+            if p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        local_data = json.load(f)
+                    if isinstance(local_data, dict) and isinstance(local_data.get(root_keys[key]), list):
+                        data = local_data
+                    else:
+                        print(f"本機 JSON 格式不符，略過：{p}")
+                except Exception as exc:
+                    print(f"讀取 {p} 失敗: {exc}")
+        if data is None:
+            missing.append(fname)
+        results[key] = data if data is not None else {}
+    if missing:
+        st.warning(
+            f"Google Sheets 與本機備援都沒有可用資料：{', '.join(missing)}。"
+            "請確認試算表工作表、Google 憑證，以及 GitHub Actions 的 GOOGLE_CREDENTIALS Secret。"
+        )
+    elif sheet_failures:
+        st.warning(
+            f"部分 Google Sheets 工作表讀取失敗（{'; '.join(sheet_failures)}），目前顯示本機 JSON 備援資料。"
+        )
+    return (
+        results["discount"],
+        results["dividend"],
+        results["institutional"],
+        results["shares_flow"],
+    )
+
 def main():
     json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
@@ -980,6 +1080,11 @@ def main():
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
     price_history_json = json.dumps(price_history, ensure_ascii=False)
     etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
+    discount_data, dividend_data, institutional_data, shares_flow_data = load_crawler_data()
+    discount_json = json.dumps(discount_data, ensure_ascii=False)
+    dividend_json = json.dumps(dividend_data, ensure_ascii=False)
+    institutional_json = json.dumps(institutional_data, ensure_ascii=False)
+    shares_flow_json = json.dumps(shares_flow_data, ensure_ascii=False)
     try:
         analysis_df = pd.DataFrame(json.loads(json_data))
         gemini_insight_json = json.dumps(
@@ -1293,6 +1398,11 @@ def main():
           border-bottom: 1px solid #dee2e6;
           background-color: #fff !important;
         }
+        .home-table { min-width: 1180px; }
+        .home-table th, .home-table td { white-space: nowrap; vertical-align: middle; }
+        .home-table th:nth-child(2), .home-table td:nth-child(2) { min-width: 150px; }
+        #content-home .card { overflow: hidden; }
+        #content-home .table-responsive { border-radius: 12px; }
 
         .rank-medal {
           display: inline-flex;
@@ -1343,6 +1453,10 @@ def main():
         </div>
       </div>
 
+      <div class="alert alert-warning mx-3 mt-3 mb-0" id="historyDataWarning" style="display:none;">
+        歷史 ETF 持股資料目前無法載入；請設定 Google 試算表憑證與共用權限。即時折溢價、除權息行事曆、三大法人及 ETF 資金流向頁仍可使用。
+      </div>
+
       <div class="container-fluid py-4 px-md-5">
         <ul class="nav nav-tabs mb-4" id="mainTabs">
           <li class="nav-item">
@@ -1371,6 +1485,18 @@ def main():
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-l" onclick="switchTab('content-l', 'tab-l')"><i class="bi bi-compass-fill text-success me-2"></i>新手選 ETF</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-discount" onclick="switchTab('content-discount', 'tab-discount')"><i class="bi bi-speedometer2 text-danger me-2"></i>即時折溢價</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-dividend" onclick="switchTab('content-dividend', 'tab-dividend')"><i class="bi bi-calendar-event text-warning me-2"></i>配息行事曆</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-institutional" onclick="switchTab('content-institutional', 'tab-institutional')"><i class="bi bi-bank text-info me-2"></i>三大法人買賣超</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-flow" onclick="switchTab('content-flow', 'tab-flow')"><i class="bi bi-cash-stack text-success me-2"></i>資金流向與規模</button>
           </li>
         </ul>
 
@@ -1421,9 +1547,12 @@ def main():
                       <th>分類</th>
                       <th>現價</th>
                       <th>漲跌幅</th>
+                      <th>即時淨值</th>
+                      <th>折溢價(%)</th>
+                      <th>狀態</th>
+                      <th>資產規模(億)</th>
                       <th>加權本益比</th>
                       <th>加權股淨比</th>
-                      <th title="優先使用證交所估計值，缺值時使用持股價格加權估算或市價代理">預估淨值*</th>
                     </tr>
                   </thead>
                   <tbody id="homeTableBody"></tbody>
@@ -1639,6 +1768,45 @@ def main():
                       <div class="meta-value" id="metaHoldingCount">-</div>
                     </div>
                   </div>
+                </div>
+
+                <!-- 即時折溢價、規模、流向與法人籌碼卡片 -->
+                <div class="card p-3 mb-4 border-start border-danger border-4 shadow-sm" id="etfMarketSummaryCard">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span class="fw-bold text-dark"><i class="bi bi-activity text-danger me-2"></i>即時折溢價、規模流向與法人買賣超</span>
+                    <span class="badge bg-light text-secondary border" id="etfMarketSourceBadge">證交所即時數據</span>
+                  </div>
+                  <div class="row g-2 text-center">
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 border rounded bg-light">
+                        <div class="small text-muted">即時折溢價</div>
+                        <div class="fw-bold fs-6 mt-1" id="metaEtfDiscount">-</div>
+                        <div class="small mt-1" id="metaEtfDiscountBadge">-</div>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 border rounded bg-light">
+                        <div class="small text-muted">資產規模 (AUM)</div>
+                        <div class="fw-bold fs-6 mt-1 text-primary" id="metaEtfAum">-</div>
+                        <div class="small text-muted mt-1" id="metaEtfTotalLots">-</div>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 border rounded bg-light">
+                        <div class="small text-muted">單日資金流向</div>
+                        <div class="fw-bold fs-6 mt-1" id="metaEtfNetFlow">-</div>
+                        <div class="small text-muted mt-1" id="metaEtfChangeLots">-</div>
+                      </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                      <div class="p-2 border rounded bg-light">
+                        <div class="small text-muted">三大法人買賣超 (張)</div>
+                        <div class="fw-bold fs-6 mt-1" id="metaEtfInstitutional">-</div>
+                        <div class="small text-muted mt-1" id="metaEtfInstDetail">-</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="etfDividendAlert" class="mt-2" style="display:none;"></div>
                 </div>
                 <div class="card p-3 mb-4 border-start border-primary border-4">
                   <div class="fw-bold text-primary mb-2">Gemini 單檔 ETF 分析</div>
@@ -1879,6 +2047,47 @@ def main():
                     </div>
                   </div>
 
+                  <!-- 個股三大法人買賣超與除權息預告卡片 -->
+                  <div class="card mb-4" id="stockInstitutionalCard" style="display: none;">
+                    <div class="card-header bg-white text-info fw-bold d-flex justify-content-between align-items-center">
+                      <span><i class="bi bi-bank me-2"></i>三大法人買賣超動態 (TWSE T86)</span>
+                      <span class="badge bg-light text-secondary border" id="stockInstDate">-</span>
+                    </div>
+                    <div class="card-body p-3">
+                      <div class="row g-2 text-center">
+                        <div class="col-6">
+                          <div class="p-2 border rounded bg-light">
+                            <div class="small text-muted">外資買賣超</div>
+                            <div class="fw-bold fs-6 mt-1" id="stockForeignLots">-</div>
+                          </div>
+                        </div>
+                        <div class="col-6">
+                          <div class="p-2 border rounded bg-light">
+                            <div class="small text-muted">投信買賣超</div>
+                            <div class="fw-bold fs-6 mt-1" id="stockTrustLots">-</div>
+                          </div>
+                        </div>
+                        <div class="col-6">
+                          <div class="p-2 border rounded bg-light">
+                            <div class="small text-muted">自營商買賣超</div>
+                            <div class="fw-bold fs-6 mt-1" id="stockDealerLots">-</div>
+                          </div>
+                        </div>
+                        <div class="col-6">
+                          <div class="p-2 border rounded bg-light">
+                            <div class="small text-muted">三大法人合計</div>
+                            <div class="fw-bold fs-6 mt-1" id="stockTotalLots">-</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div id="stockDividendAlert" class="mt-2 text-start" style="display:none;"></div>
+                    </div>
+                  </div>
+
+                  <div class="alert alert-info small mb-4" id="stockExternalDataNotice" style="display:none;">
+                    此標的目前沒有 ETF 持股歷史資料；以下顯示爬蟲取得的法人買賣超與除權息資訊。
+                  </div>
+
                   <div class="card">
                     <div class="card-header text-dark d-flex justify-content-between align-items-center"><span><i class="bi bi-layer-forward me-2 text-warning"></i>各大 ETF 基金對此股票之籌碼調整明細</span><button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('stockDistBody', 'stock_etf_changes.csv')">下載異動</button></div>
                     <div class="table-responsive">
@@ -1938,12 +2147,13 @@ def main():
                     <tr>
                       <th>精選推薦 ETF</th>
                       <th>ETF 名稱</th>
+                      <th class="text-center">涵蓋檔數</th>
                       <th class="text-end">所包含您選取目標之總權重(%)</th>
                       <th class="px-4">成分重疊明細對照</th>
                     </tr>
                   </thead>
                   <tbody id="matchResultBody">
-                    <tr><td colspan="4" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>
+                    <tr><td colspan="5" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -2277,6 +2487,372 @@ def main():
             <div class="card p-3"><div class="table-responsive" style="max-height: 680px; overflow:auto;"><table class="table table-hover align-middle"><thead><tr><th>ETF</th><th>分類</th><th class="text-end">篩選分數</th><th class="text-end">五年平均殖利率</th><th class="text-end">前十大權重</th><th class="text-end">20日報酬</th><th>適合先了解的原因</th></tr></thead><tbody id="beginnerFinderBody"></tbody></table></div></div>
           </div>
 
+          <!-- 即時折溢價監控 Tab -->
+          <div class="custom-tab-content" id="content-discount">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-speedometer2 text-danger me-2"></i>全市場 ETF 即時折溢價監控儀表板</h4>
+                  <div class="text-muted small">資料來源：臺灣證券交易所 基本市況報導 (MIS) | 最後更新：<span id="discountUpdateTime" class="fw-bold text-secondary">-</span></div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('discountTableBody', 'etf_discount_premium.csv')"><i class="bi bi-download me-1"></i>下載折溢價 CSV</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="row g-3 mb-4" id="discountKpiCards"></div>
+
+            <!-- 追高警示榜與撿便宜榜 -->
+            <div class="row g-4 mb-4">
+              <div class="col-lg-6">
+                <div class="card h-100 shadow-sm border-top border-danger border-3">
+                  <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-fire me-2"></i>🔥 溢價最高 Top 10（追高警示榜）</span>
+                    <span class="badge bg-danger-subtle text-danger border border-danger-subtle small">追高買貴風險高</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號</th><th>名稱</th><th class="text-end">市價</th><th class="text-end">預估淨值</th><th class="text-end">溢價(%)</th><th class="text-center">狀態</th><th>動作</th></tr></thead>
+                      <tbody id="topPremiumsBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-6">
+                <div class="card h-100 shadow-sm border-top border-success border-3">
+                  <div class="card-header bg-white text-success fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-gem me-2"></i>💎 折價最大 Top 10（撿便宜機會榜）</span>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle small">折價安全邊際</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號</th><th>名稱</th><th class="text-end">市價</th><th class="text-end">預估淨值</th><th class="text-end">折價(%)</th><th class="text-center">狀態</th><th>動作</th></tr></thead>
+                      <tbody id="topDiscountsBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 完整折溢價表格 -->
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                  <div class="btn-group btn-group-sm" role="group" id="discountFilterGroup">
+                    <button type="button" class="btn btn-outline-primary active" onclick="setDiscountFilter('all', this)">全部</button>
+                    <button type="button" class="btn btn-outline-danger" onclick="setDiscountFilter('severe_premium', this)">⚠️ 嚴重溢價</button>
+                    <button type="button" class="btn btn-outline-success" onclick="setDiscountFilter('severe_discount', this)">💎 嚴重折價</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setDiscountFilter('listed', this)">上市</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setDiscountFilter('otc', this)">上櫃</button>
+                  </div>
+                  <input type="text" id="discountSearchInput" class="form-control form-control-sm" style="max-width: 220px;" placeholder="搜尋 ETF 代號或名稱" oninput="applyDiscountFilters()">
+                  <select id="discountSortSelect" class="form-select form-select-sm" style="max-width: 200px;" onchange="applyDiscountFilters()">
+                    <option value="ratio_desc">折溢價率：高 → 低</option>
+                    <option value="ratio_asc">折溢價率：低 → 高</option>
+                    <option value="price_desc">市價：高 → 低</option>
+                    <option value="nav_desc">預估淨值：高 → 低</option>
+                  </select>
+                </div>
+                <div class="small text-muted" id="discountTableCount">共 - 檔</div>
+              </div>
+              <div class="table-responsive" style="max-height: 680px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light sticky-top">
+                    <tr>
+                      <th>代號</th>
+                      <th>名稱</th>
+                      <th>市場</th>
+                      <th class="text-end">成交市價</th>
+                      <th class="text-end">預估淨值 (NAV)</th>
+                      <th class="text-end">折溢價額</th>
+                      <th class="text-end">折溢價率(%)</th>
+                      <th class="text-center">狀態</th>
+                      <th class="text-end">前日淨值</th>
+                      <th>報價時間</th>
+                      <th class="text-center">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="discountTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ETF 除權息與配息行事曆 Tab -->
+          <div class="custom-tab-content" id="content-dividend">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-calendar-check text-warning me-2"></i>ETF 除權息與配息行事曆</h4>
+                  <div class="text-muted small">資料來源：臺灣證券交易所 (TWSE TWT48U 除權除息預告表) | 最後更新：<span id="dividendUpdateTime" class="fw-bold text-secondary">-</span></div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('dividendTableBody', 'etf_dividend_calendar.csv')"><i class="bi bi-download me-1"></i>下載行事曆 CSV</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="row g-3 mb-4" id="dividendKpiCards"></div>
+
+            <!-- 近期重點除息卡片 (Timeline View) -->
+            <div class="card p-3 mb-4 shadow-sm">
+              <div class="fw-bold text-dark mb-3"><i class="bi bi-clock-history text-warning me-2"></i>近期即將除息標的速覽</div>
+              <div class="row g-3" id="dividendTimelineCards"></div>
+            </div>
+
+            <!-- 完整除權息表格 -->
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                  <div class="btn-group btn-group-sm" role="group" id="dividendFilterGroup">
+                    <button type="button" class="btn btn-outline-primary active" onclick="setDividendFilter('all', this)">全部標的</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setDividendFilter('etf', this)">僅 ETF</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setDividendFilter('stock', this)">僅個股</button>
+                  </div>
+                  <input type="text" id="dividendSearchInput" class="form-control form-control-sm" style="max-width: 220px;" placeholder="搜尋代號或名稱" oninput="applyDividendFilters()">
+                  <select id="dividendSortSelect" class="form-select form-select-sm" style="max-width: 180px;" onchange="applyDividendFilters()">
+                    <option value="date_asc">除息日：近 → 遠</option>
+                    <option value="date_desc">除息日：遠 → 近</option>
+                    <option value="cash_desc">每股配息：高 → 低</option>
+                  </select>
+                </div>
+                <div class="small text-muted" id="dividendTableCount">共 - 筆除息日程</div>
+              </div>
+              <div class="table-responsive" style="max-height: 680px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light sticky-top">
+                    <tr>
+                      <th>除息日期</th>
+                      <th>除息前最後買進日</th>
+                      <th>證券代號</th>
+                      <th>證券名稱</th>
+                      <th>類別</th>
+                      <th>除權息型態</th>
+                      <th class="text-end">每股現金股利 (元)</th>
+                      <th class="text-end">除息參考價</th>
+                      <th class="text-center">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dividendTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 三大法人買賣超日報 Tab -->
+          <div class="custom-tab-content" id="content-institutional">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-bank text-info me-2"></i>三大法人買賣超日報與排行分析</h4>
+                  <div class="text-muted small">資料來源：臺灣證券交易所 (TWSE T86) | 交易日期：<span id="instTradeDate" class="fw-bold text-secondary">-</span></div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('instTableBody', 'institutional_investors.csv')"><i class="bi bi-download me-1"></i>下載買賣超 CSV</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="row g-3 mb-4" id="instKpiCards"></div>
+
+            <div class="d-flex justify-content-end align-items-center gap-2 mb-3">
+              <span class="small text-muted">下方排行顯示：</span>
+              <div class="btn-group btn-group-sm" role="group" id="instMetricGroup">
+                <button type="button" class="btn btn-primary active" onclick="setInstMetric('amount', this)">買賣超金額</button>
+                <button type="button" class="btn btn-outline-primary" onclick="setInstMetric('lots', this)">買賣超張數</button>
+              </div>
+            </div>
+
+            <!-- 三大排行榜 (投信買超、外資買超、三大法人合計買超) -->
+            <div class="row g-4 mb-4">
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-primary border-3">
+                  <div class="card-header bg-white text-primary fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-building me-2"></i>🏢 投信買超 Top 10</span>
+                    <span class="badge bg-primary-subtle text-primary border small">ETF換股動能</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTrustMetricHead">投信買超金額</th><th class="text-end" id="topTrustTotalHead">合計金額</th><th>動作</th></tr></thead>
+                      <tbody id="topTrustBuyBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-danger border-3">
+                  <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-globe2 me-2"></i>🏆 外資買超 Top 10</span>
+                    <span class="badge bg-danger-subtle text-danger border small">外資偏多佈局</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topForeignMetricHead">外資買超金額</th><th class="text-end" id="topForeignTotalHead">合計金額</th><th>動作</th></tr></thead>
+                      <tbody id="topForeignBuyBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-warning border-3">
+                  <div class="card-header bg-white text-dark fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-stars me-2"></i>🌟 三大法人合計買超 Top 10</span>
+                    <span class="badge bg-warning-subtle text-dark border small">籌碼共識強烈</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTotalMetricHead">合計買超金額</th><th class="text-end" id="topTotalTrustHead">投信金額</th><th>動作</th></tr></thead>
+                      <tbody id="topTotalBuyBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 完整買賣超明細表格 -->
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                  <div class="btn-group btn-group-sm" role="group" id="instFilterGroup">
+                    <button type="button" class="btn btn-outline-primary active" onclick="setInstFilter('all', this)">全部標的</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setInstFilter('etf', this)">僅 ETF</button>
+                    <button type="button" class="btn btn-outline-secondary" onclick="setInstFilter('stock', this)">僅個股</button>
+                  </div>
+                  <input type="text" id="instSearchInput" class="form-control form-control-sm" style="max-width: 220px;" placeholder="搜尋代號或名稱" oninput="applyInstFilters()">
+                  <select id="instSortSelect" class="form-select form-select-sm" style="max-width: 200px;" onchange="applyInstFilters()">
+                    <option value="total_desc">三大法人合計買超：高 → 低</option>
+                    <option value="total_asc">三大法人合計賣超：多 → 少</option>
+                    <option value="trust_desc">投信買超：高 → 低</option>
+                    <option value="foreign_desc">外資買超：高 → 低</option>
+                    <option value="dealer_desc">自營商買超：高 → 低</option>
+                  </select>
+                </div>
+                <div class="small text-muted" id="instTableCount">共 - 檔標的</div>
+              </div>
+              <div class="table-responsive" style="max-height: 680px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light sticky-top">
+                    <tr>
+                      <th>證券代號</th>
+                      <th>證券名稱</th>
+                      <th>標的類型</th>
+                      <th class="text-end" id="instForeignHead">外資及陸資 (張)</th>
+                      <th class="text-end" id="instTrustHead">投信買賣超 (張)</th>
+                      <th class="text-end" id="instDealerHead">自營商買賣超 (張)</th>
+                      <th class="text-end" id="instTotalHead">三大法人合計 (張)</th>
+                      <th class="text-center">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="instTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 發行單位數與資金流向 Tab -->
+          <div class="custom-tab-content" id="content-flow">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-cash-stack text-success me-2"></i>ETF 發行單位數與資金流向追蹤</h4>
+                  <div class="text-muted small">資料來源：臺灣證券交易所 MIS | 資料日期：<span id="flowTradeDate" class="fw-bold text-secondary">-</span> | 最後更新：<span id="flowUpdateTime" class="fw-bold text-secondary">-</span></div>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-secondary btn-sm" onclick="downloadTableCsv('flowTableBody', 'etf_shares_flow.csv')"><i class="bi bi-download me-1"></i>下載資金流向 CSV</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="row g-3 mb-4" id="flowKpiCards"></div>
+
+            <!-- 三大流向榜單 (巨無霸規模、單日吸金王、資金撤退榜) -->
+            <div class="row g-4 mb-4">
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-primary border-3">
+                  <div class="card-header bg-white text-primary fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-trophy-fill me-2"></i>👑 ETF 資產規模巨無霸 Top 10</span>
+                    <span class="badge bg-primary-subtle text-primary border small">AUM 最大</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">規模(億)</th><th class="text-end">發行張數</th><th>動作</th></tr></thead>
+                      <tbody id="topScaleBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-danger border-3">
+                  <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-arrow-down-circle-fill me-2"></i>💰 單日吸金王 Top 10 (淨流入)</span>
+                    <span class="badge bg-danger-subtle text-danger border small">資金大舉湧入</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">淨流入(億)</th><th class="text-end">申購張數</th><th>動作</th></tr></thead>
+                      <tbody id="topInflowBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-4">
+                <div class="card h-100 shadow-sm border-top border-success border-3">
+                  <div class="card-header bg-white text-success fw-bold d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-arrow-up-circle-fill me-2"></i>🏃 單日資金撤退榜 Top 10 (淨流出)</span>
+                    <span class="badge bg-success-subtle text-success border small">資金贖回減碼</span>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">淨流出(億)</th><th class="text-end">贖回張數</th><th>動作</th></tr></thead>
+                      <tbody id="topOutflowBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 完整發行單位數與資金流向表格 -->
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                  <input type="text" id="flowSearchInput" class="form-control form-control-sm" style="max-width: 220px;" placeholder="搜尋 ETF 代號或名稱" oninput="applyFlowFilters()">
+                  <select id="flowSortSelect" class="form-select form-select-sm" style="max-width: 200px;" onchange="applyFlowFilters()">
+                    <option value="aum_desc">資產規模 (AUM)：大 → 小</option>
+                    <option value="inflow_desc">資金淨流入：多 → 少</option>
+                    <option value="outflow_desc">資金淨流出：多 → 少</option>
+                    <option value="units_desc">發行張數：多 → 少</option>
+                    <option value="change_desc">申贖變動張數：多 → 少</option>
+                  </select>
+                </div>
+                <div class="small text-muted" id="flowTableCount">共 - 檔 ETF</div>
+              </div>
+              <div class="table-responsive" style="max-height: 680px; overflow: auto;">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light sticky-top">
+                    <tr>
+                      <th>ETF代號</th>
+                      <th>ETF名稱</th>
+                      <th class="text-end">成交市價</th>
+                      <th class="text-end">預估淨值</th>
+                      <th class="text-end">總發行張數 (張)</th>
+                      <th class="text-end">申贖變動 (張)</th>
+                      <th class="text-end">資產規模 (億元)</th>
+                      <th class="text-end">估計單日淨流向 (億元)</th>
+                      <th>資料時間</th>
+                      <th class="text-center">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="flowTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -2289,6 +2865,27 @@ def main():
         const etfCategoryData = __ETF_CATEGORY_PLACEHOLDER__;
         const priceHistoryData = __PRICE_HISTORY_PLACEHOLDER__;
         const geminiInsight = __GEMINI_PLACEHOLDER__;
+        const discountPremiumRaw = __DISCOUNT_PLACEHOLDER__;
+        const dividendCalendarRaw = __DIVIDEND_PLACEHOLDER__;
+        const institutionalRaw = __INSTITUTIONAL_PLACEHOLDER__;
+        const sharesFlowRaw = __SHARES_FLOW_PLACEHOLDER__;
+
+        const discountMap = {};
+        if (discountPremiumRaw && Array.isArray(discountPremiumRaw.data)) {
+            discountPremiumRaw.data.forEach(item => { if (item.code) discountMap[item.code] = item; });
+        }
+        const dividendMap = {};
+        if (dividendCalendarRaw && Array.isArray(dividendCalendarRaw.events)) {
+            dividendCalendarRaw.events.forEach(item => { if (item.code) dividendMap[item.code] = item; });
+        }
+        const institutionalMap = {};
+        if (institutionalRaw && Array.isArray(institutionalRaw.data)) {
+            institutionalRaw.data.forEach(item => { if (item.code) institutionalMap[item.code] = item; });
+        }
+        const sharesFlowMap = {};
+        if (sharesFlowRaw && Array.isArray(sharesFlowRaw.data)) {
+            sharesFlowRaw.data.forEach(item => { if (item.code) sharesFlowMap[item.code] = item; });
+        }
 
         // 可在此指定首頁、ETF清單、比較與雷達的顯示順序。
         // 未列出的 ETF 會依代號自然排序接在後面。
@@ -2417,8 +3014,8 @@ def main():
         window.onload = function() {
             document.getElementById('loading').style.display = 'none';
             if (!globalRawData || globalRawData.length === 0) {
-                alert("後端未成功載入歷史數據，請確認試算表名稱與結構。");
-                return;
+                const warning = document.getElementById('historyDataWarning');
+                if (warning) warning.style.display = 'block';
             }
             initDashboard();
         };
@@ -2444,6 +3041,14 @@ def main():
                 renderReturnYieldRanking();
             } else if (contentId === 'content-l') {
                 renderBeginnerFinder();
+            } else if (contentId === 'content-discount') {
+                renderDiscountPremiumView();
+            } else if (contentId === 'content-dividend') {
+                renderDividendCalendarView();
+            } else if (contentId === 'content-institutional') {
+                renderInstitutionalView();
+            } else if (contentId === 'content-flow') {
+                renderSharesFlowView();
             }
         }
 
@@ -2782,15 +3387,37 @@ def main():
                 let weightedPer = totalTwWeightPer > 0 ? (weightedPerSum / totalTwWeightPer).toFixed(2) : "-";
                 let weightedPbr = totalTwWeightPbr > 0 ? (weightedPbrSum / totalTwWeightPbr).toFixed(2) : "-";
 
+                const disc = discountMap[etf];
+                const flow = sharesFlowMap[etf];
+                let realNavText = navText;
+                let ratioHtml = '<span class="text-muted">-</span>';
+                let statusBadge = '<span class="badge bg-light text-muted">-</span>';
+                if (disc && disc.nav > 0) {
+                    realNavText = `${disc.nav.toFixed(2)}`;
+                    let rVal = Number(disc.ratio || 0);
+                    let rCol = rVal > 0 ? "text-danger" : (rVal < 0 ? "text-success" : "text-muted");
+                    ratioHtml = `<span class="fw-bold font-monospace ${rCol}">${rVal > 0 ? '+' : ''}${rVal.toFixed(2)}%</span>`;
+                    let bClass = "bg-secondary";
+                    if (disc.status && disc.status.includes("嚴重溢價")) bClass = "bg-danger";
+                    else if (disc.status && disc.status.includes("嚴重折價")) bClass = "bg-success";
+                    else if (disc.status && disc.status.includes("溢價")) bClass = "bg-warning text-dark";
+                    else if (disc.status && disc.status.includes("折價")) bClass = "bg-info text-dark";
+                    statusBadge = `<span class="badge ${bClass}">${disc.status}</span>`;
+                }
+                let aumText = (flow && flow.aum_billion > 0) ? `${Number(flow.aum_billion).toLocaleString()}` : "-";
+
                 homeHtml += `<tr data-category="${category}" data-change="${quote.changePct === null ? 0 : quote.changePct}" data-price="${quote.price || 0}">
                     <td class="font-monospace fw-bold">${etf}</td>
                     <td class="fw-bold text-secondary">${mappedName}</td>
                     <td>${categoryBadgeHtml(category)}</td>
                     <td class="font-monospace fw-bold">${price}</td>
                     <td class="font-monospace ${styleColor}">${displayChange}</td>
+                    <td class="font-monospace fw-bold text-primary">${realNavText}</td>
+                    <td class="text-end">${ratioHtml}</td>
+                    <td class="text-center">${statusBadge}</td>
+                    <td class="font-monospace text-end">${aumText}</td>
                     <td class="font-monospace fw-bold text-info">${weightedPer}</td>
                     <td class="font-monospace fw-bold text-teal" style="color: #319795 !important;">${weightedPbr}</td>
-                    <td class="font-monospace fw-bold text-primary" title="${estimatedNav.source}">${navText}</td>
                 </tr>`;
             });
 
@@ -2806,6 +3433,10 @@ def main():
             if (geminiStockBox) geminiStockBox.innerText = geminiInsight || '目前沒有 Gemini 分析結果。';
             renderCategorySummary();
             applyHomeFilters();
+            renderDiscountPremiumView();
+            renderDividendCalendarView();
+            renderInstitutionalView();
+            renderSharesFlowView();
 
             if(sortedEtfs.length > 0) {
                 selectEtf(sortedEtfs[0]);
@@ -3196,10 +3827,88 @@ def main():
             const estimatedNav = getEstimatedNav(etfCode);
             let changePct = quote.changePct === null ? "-" : quote.changePct.toFixed(2);
             document.getElementById('metaMarketPrice').innerText = quote.price > 0 ? quote.price.toFixed(2) : "-";
-            document.getElementById('metaEstimatedNav').innerText = estimatedNav.value > 0 ? estimatedNav.value.toFixed(2) : "-";
-            document.getElementById('metaEstimatedNav').title = estimatedNav.source;
+
+            // 折溢價資料配對與淨值更新
+            const discItem = discountMap[etfCode];
+            if (discItem && discItem.nav > 0) {
+                document.getElementById('metaEstimatedNav').innerText = discItem.nav.toFixed(2);
+                document.getElementById('metaEstimatedNav').title = `MIS 即時預估淨值 (${discItem.time})`;
+            } else {
+                document.getElementById('metaEstimatedNav').innerText = estimatedNav.value > 0 ? estimatedNav.value.toFixed(2) : "-";
+                document.getElementById('metaEstimatedNav').title = estimatedNav.source;
+            }
             document.getElementById('metaChange').innerText = changePct !== "-" ? (toNumber(changePct) > 0 ? `+${changePct}%` : `${changePct}%`) : "-";
             document.getElementById('metaVolume').innerText = quote.volume > 0 ? quote.volume.toLocaleString() : "-";
+
+            // 更新單檔市場綜合卡片 (折溢價、規模、資金流向、三大法人、配息預告)
+            const metaDiscEl = document.getElementById('metaEtfDiscount');
+            const metaDiscBadgeEl = document.getElementById('metaEtfDiscountBadge');
+            if (metaDiscEl && metaDiscBadgeEl) {
+                if (discItem) {
+                    const diffStr = discItem.diff > 0 ? `+${discItem.diff.toFixed(2)}` : `${discItem.diff.toFixed(2)}`;
+                    const ratioStr = discItem.ratio > 0 ? `+${discItem.ratio.toFixed(2)}%` : `${discItem.ratio.toFixed(2)}%`;
+                    const rCol = discItem.ratio > 0 ? 'text-danger' : (discItem.ratio < 0 ? 'text-success' : 'text-muted');
+                    metaDiscEl.innerHTML = `<span class="${rCol}">${diffStr} (${ratioStr})</span>`;
+                    let bClass = 'bg-secondary';
+                    if (discItem.status.includes('嚴重溢價')) bClass = 'bg-danger';
+                    else if (discItem.status.includes('嚴重折價')) bClass = 'bg-success';
+                    else if (discItem.status.includes('溢價')) bClass = 'bg-warning text-dark';
+                    else if (discItem.status.includes('折價')) bClass = 'bg-info text-dark';
+                    metaDiscBadgeEl.innerHTML = `<span class="badge ${bClass}">${discItem.status}</span> <span class="text-muted ms-1">${discItem.time || ''}</span>`;
+                } else {
+                    metaDiscEl.innerText = '-';
+                    metaDiscBadgeEl.innerText = '尚無即時折溢價資料';
+                }
+            }
+
+            const flowItem = sharesFlowMap[etfCode];
+            const metaAumEl = document.getElementById('metaEtfAum');
+            const metaTotalLotsEl = document.getElementById('metaEtfTotalLots');
+            const metaNetFlowEl = document.getElementById('metaEtfNetFlow');
+            const metaChangeLotsEl = document.getElementById('metaEtfChangeLots');
+            if (metaAumEl) {
+                if (flowItem) {
+                    metaAumEl.innerText = `${Number(flowItem.aum_billion).toLocaleString()} 億元`;
+                    metaTotalLotsEl.innerText = `已發行 ${Number(flowItem.total_lots).toLocaleString()} 張`;
+                    const flowVal = Number(flowItem.net_flow_billion || 0);
+                    const flowCol = flowVal > 0 ? 'text-danger' : (flowVal < 0 ? 'text-success' : 'text-muted');
+                    metaNetFlowEl.innerHTML = `<span class="${flowCol}">${flowVal > 0 ? '+' : ''}${flowVal.toFixed(3)} 億元</span>`;
+                    const chgLots = Number(flowItem.change_lots || 0);
+                    const chgText = chgLots > 0 ? `申購 +${chgLots.toLocaleString()} 張` : (chgLots < 0 ? `贖回 ${chgLots.toLocaleString()} 張` : '申贖無變動');
+                    metaChangeLotsEl.innerText = chgText;
+                } else {
+                    metaAumEl.innerText = '-';
+                    metaTotalLotsEl.innerText = '無規模資料';
+                    metaNetFlowEl.innerText = '-';
+                    metaChangeLotsEl.innerText = '-';
+                }
+            }
+
+            const instItem = institutionalMap[etfCode];
+            const metaInstEl = document.getElementById('metaEtfInstitutional');
+            const metaInstDetailEl = document.getElementById('metaEtfInstDetail');
+            if (metaInstEl) {
+                if (instItem) {
+                    const totLots = Number(instItem.total_lots || 0);
+                    const totCol = totLots > 0 ? 'text-danger' : (totLots < 0 ? 'text-success' : 'text-muted');
+                    metaInstEl.innerHTML = `<span class="${totCol}">合計 ${totLots > 0 ? '+' : ''}${totLots.toLocaleString()} 張</span>`;
+                    metaInstDetailEl.innerHTML = `外資 <b class="${instItem.foreign_lots > 0 ? 'text-danger' : (instItem.foreign_lots < 0 ? 'text-success' : 'text-muted')}">${instItem.foreign_lots > 0 ? '+' : ''}${instItem.foreign_lots.toLocaleString()}</b> | 投信 <b class="${instItem.trust_lots > 0 ? 'text-danger' : (instItem.trust_lots < 0 ? 'text-success' : 'text-muted')}">${instItem.trust_lots > 0 ? '+' : ''}${instItem.trust_lots.toLocaleString()}</b>`;
+                } else {
+                    metaInstEl.innerText = '-';
+                    metaInstDetailEl.innerText = '近期無買賣超日報';
+                }
+            }
+
+            const divEvent = dividendMap[etfCode];
+            const divAlertEl = document.getElementById('etfDividendAlert');
+            if (divAlertEl) {
+                if (divEvent) {
+                    divAlertEl.style.display = 'block';
+                    divAlertEl.innerHTML = `<div class="alert alert-warning py-2 px-3 small mb-0"><i class="bi bi-calendar-check-fill me-2"></i><b>除息預告：</b>除息日 <b>${divEvent.ex_date}</b>，每股配息 <b>$${divEvent.cash_dividend_str}</b> 元（最後買進日：<b>${divEvent.last_buy_date}</b>，參考價 $${divEvent.ref_price || '-'}）</div>`;
+                } else {
+                    divAlertEl.style.display = 'none';
+                }
+            }
 
             let stocks = latestRows.filter(r => isNormalStock(r.stock, r.name)).sort((a,b) => toNumber(b.weight) - toNumber(a.weight));
             let nonStocks = latestRows.filter(r => !isNormalStock(r.stock, r.name)).sort((a,b) => toNumber(b.weight) - toNumber(a.weight));
@@ -3820,16 +4529,82 @@ def main():
                 || d.stock.toUpperCase() === sCode.toUpperCase()
                 || (d.name && d.name.toUpperCase().includes(sCode.toUpperCase()))
             );
-            if (stockRows.length === 0) {
+            const externalSignal = stockRows.length === 0
+                ? [...(institutionalRaw?.data || []), ...(dividendCalendarRaw?.events || [])].find(item =>
+                    String(item.code || '').toUpperCase() === sCode.toUpperCase()
+                    || (item.name && String(item.name).toUpperCase().includes(sCode.toUpperCase()))
+                )
+                : null;
+            if (stockRows.length === 0 && !externalSignal) {
                 alert("在大數據資料庫中找不到該個股紀錄。");
                 return;
             }
 
-            let targetCode = stockRows[0].stock;
-            let targetName = stockRows.find(row => row.name)?.name || (tickerMappingData[targetCode] ? tickerMappingData[targetCode].name : targetCode);
+            let targetCode = stockRows[0]?.stock || externalSignal.code;
+            let targetName = stockRows.find(row => row.name)?.name
+                || tickerMappingData[targetCode]?.name
+                || externalSignal?.name
+                || targetCode;
 
             document.getElementById('resStockTitle').innerText = `${targetCode} ${targetName}`;
             document.getElementById('stockResultContainer').style.display = 'block';
+            const externalNotice = document.getElementById('stockExternalDataNotice');
+            if (externalNotice) externalNotice.style.display = stockRows.length === 0 ? 'block' : 'none';
+
+            // 更新個股的三大法人買賣超動態 (TWSE T86)
+            const stockInst = institutionalMap[targetCode];
+            const selectedInstRange = parseInt(document.getElementById('stockChangeRange')?.value || '1');
+            // 法人爬蟲若提供 history/daily/records，依個股頁所選區間加總；只有單日資料時仍顯示當日值。
+            const instHistory = [
+                ...(Array.isArray(institutionalRaw?.history) ? institutionalRaw.history : []),
+                ...(Array.isArray(institutionalRaw?.daily) ? institutionalRaw.daily : []),
+                ...(Array.isArray(institutionalRaw?.records) ? institutionalRaw.records : [])
+            ].filter(item => String(item.code || '') === String(targetCode));
+            const instRows = instHistory.length ? instHistory : (stockInst ? [stockInst] : []);
+            const instDates = [...new Set(instRows.map(item => item.date).filter(Boolean))].sort((a,b) => new Date(a) - new Date(b));
+            const rangeInstRows = instDates.length > selectedInstRange
+                ? instRows.filter(item => instDates.slice(-selectedInstRange).includes(item.date))
+                : instRows;
+            const stockInstRange = rangeInstRows.length ? {
+                date: instDates.length > 1 ? `${instDates[Math.max(0, instDates.length - selectedInstRange)]} ~ ${instDates[instDates.length - 1]}` : stockInst?.date,
+                foreign_lots: rangeInstRows.reduce((sum, item) => sum + instLots(item, 'foreign'), 0),
+                trust_lots: rangeInstRows.reduce((sum, item) => sum + instLots(item, 'trust'), 0),
+                dealer_lots: rangeInstRows.reduce((sum, item) => sum + instLots(item, 'dealer'), 0),
+                total_lots: rangeInstRows.reduce((sum, item) => sum + instLots(item, 'total'), 0)
+            } : null;
+            const stockDiv = dividendMap[targetCode];
+            const stockInstCard = document.getElementById('stockInstitutionalCard');
+            if (stockInstCard) {
+                if (stockInstRange) {
+                    stockInstCard.style.display = 'block';
+                    document.getElementById('stockInstDate').innerText = stockInstRange.date ? `區間：${stockInstRange.date}` : '';
+                    const fmtLot = (n) => {
+                        const num = Number(n || 0);
+                        const color = num > 0 ? 'text-danger' : (num < 0 ? 'text-success' : 'text-muted');
+                        return `<span class="${color}">${num > 0 ? '+' : ''}${num.toLocaleString()} 張</span>`;
+                    };
+                    document.getElementById('stockForeignLots').innerHTML = fmtLot(stockInstRange.foreign_lots);
+                    document.getElementById('stockTrustLots').innerHTML = fmtLot(stockInstRange.trust_lots);
+                    document.getElementById('stockDealerLots').innerHTML = fmtLot(stockInstRange.dealer_lots);
+                    document.getElementById('stockTotalLots').innerHTML = fmtLot(stockInstRange.total_lots);
+                } else {
+                    document.getElementById('stockInstDate').innerText = '';
+                    ['stockForeignLots', 'stockTrustLots', 'stockDealerLots', 'stockTotalLots']
+                        .forEach(id => { document.getElementById(id).innerText = '-'; });
+                }
+                stockInstCard.style.display = stockInstRange || stockDiv ? 'block' : 'none';
+            }
+
+            // 更新個股除權息預告
+            const stockDivAlert = document.getElementById('stockDividendAlert');
+            if (stockDivAlert) {
+                if (stockDiv) {
+                    stockDivAlert.style.display = 'block';
+                    stockDivAlert.innerHTML = `<div class="alert alert-warning py-2 px-3 small mb-0"><i class="bi bi-calendar-event me-2"></i><b>除權息預告：</b>除息日 <b>${stockDiv.ex_date}</b>，每股現金股利 <b>$${stockDiv.cash_dividend_str}</b> 元（最後買進日：<b>${stockDiv.last_buy_date}</b>，參考價 $${stockDiv.ref_price || '-'}）</div>`;
+                } else {
+                    stockDivAlert.style.display = 'none';
+                }
+            }
 
             let etfSet = sortEtfCodes([...new Set(globalRawData.map(d => d.etf))]);
             let latestHolders = [];
@@ -3911,7 +4686,7 @@ def main():
                 return `<div class="col-6 col-xl-4" data-category="${category}"><div class="card p-3 h-100">
                     <div class="d-flex justify-content-between align-items-center">${categoryBadgeHtml(category)}<span class="small text-muted">${item.etfs} 檔持有</span></div>
                     <div class="small text-muted mt-2">分類合計持有：<b>${item.holding.toLocaleString()}</b></div>
-                    <div class="small text-muted">前一交易日變化：<b class="${diffClass}">${diffText}</b></div>
+                    <div class="small text-muted">所選區間變化：<b class="${diffClass}">${diffText}</b></div>
                 </div></div>`;
             }).join('');
             renderStockCategoryPieChart(stockCategoryStats);
@@ -3973,7 +4748,7 @@ def main():
 
         function calculateStockMatcher() {
             if (selectedTargetStocks.length === 0) {
-                document.getElementById('matchResultBody').innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>';
+                document.getElementById('matchResultBody').innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">請先在上方搜尋並點選加入欲觀測的個股目標組合。</td></tr>';
                 return;
             }
 
@@ -4011,19 +4786,21 @@ def main():
                 }
             });
 
-            results.sort((a,b) => b.totalWeight - a.totalWeight);
+            // 先按涵蓋檔數排序，再按涵蓋目標的總權重排序；例如三檔目標會優先顯示三檔皆有的 ETF。
+            results.sort((a,b) => b.matchedCount - a.matchedCount || b.totalWeight - a.totalWeight || a.etf.localeCompare(b.etf));
 
             let html = results.map(r => {
                 let detailChips = r.matchedHoldings.map(h => `<span class="badge bg-light text-primary border me-1"><b>${h.code}</b> ${h.name} (${h.weight.toFixed(2)}%)</span>`).join('');
                 return `<tr>
                     <td class="fw-bold font-monospace text-primary fs-6">${r.etf}</td>
                     <td class="fw-bold text-secondary">${r.etfName}</td>
+                    <td class="text-center"><span class="badge ${r.matchedCount === selectedTargetStocks.length ? 'bg-success' : 'bg-light text-secondary border'}">${r.matchedCount} / ${selectedTargetStocks.length} 檔</span></td>
                     <td class="text-end font-monospace fw-bold text-danger fs-6">${r.totalWeight.toFixed(2)}%</td>
                     <td class="px-4">${detailChips}</td>
                 </tr>`;
             }).join('');
 
-            document.getElementById('matchResultBody').innerHTML = html || '<tr><td colspan="4" class="text-center py-4 text-muted">全市場 ETF 中尚無同時包含您選取目標之組合。</td></tr>';
+            document.getElementById('matchResultBody').innerHTML = html || '<tr><td colspan="5" class="text-center py-4 text-muted">全市場 ETF 中尚無同時包含您選取目標之組合。</td></tr>';
         }
 
         function toggleGlobalChanges() {
@@ -4433,6 +5210,516 @@ def main():
             document.getElementById('compareCoreTableBody').innerHTML = coreHoldings.map(buildRow).join('') || `<tr><td colspan="${3 + totalSelected}" class="text-center text-muted py-3">選定之 ETF 之間無全數重疊的共同核心持股</td></tr>`;
             document.getElementById('compareUniqueTableBody').innerHTML = uniqueHoldings.map(buildRow).join('') || `<tr><td colspan="${3 + totalSelected}" class="text-center text-muted py-3">選定之 ETF 之間無差異化持股</td></tr>`;
         }
+
+        // ==========================================
+        // 7. 新增導覽頁：即時折溢價、配息行事曆、三大法人買賣超、資金流向
+        // ==========================================
+
+        // --- 7.1 即時折溢價監控 ---
+        let currentDiscountFilter = 'all';
+
+        function setDiscountFilter(filterType, btn) {
+            currentDiscountFilter = filterType;
+            document.querySelectorAll('#discountFilterGroup button').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            applyDiscountFilters();
+        }
+
+        function renderDiscountPremiumView() {
+            if (!discountPremiumRaw || !Array.isArray(discountPremiumRaw.data)) return;
+            const data = discountPremiumRaw.data;
+            const updateTimeEl = document.getElementById('discountUpdateTime');
+            if (updateTimeEl) updateTimeEl.innerText = discountPremiumRaw.updated_at || '-';
+
+            // KPI 計算
+            const totalCount = data.length;
+            const severePremiums = data.filter(d => Number(d.ratio || 0) >= 1.0);
+            const severeDiscounts = data.filter(d => Number(d.ratio || 0) <= -1.0);
+            const maxPrem = [...data].sort((a,b) => Number(b.ratio || 0) - Number(a.ratio || 0))[0];
+            const maxDisc = [...data].sort((a,b) => Number(a.ratio || 0) - Number(b.ratio || 0))[0];
+
+            const kpiContainer = document.getElementById('discountKpiCards');
+            if (kpiContainer) {
+                kpiContainer.innerHTML = [
+                    ['監控總數', totalCount, '檔 ETF', 'text-primary'],
+                    ['⚠️ 嚴重溢價 (≥1%)', severePremiums.length, '檔需警惕追高', 'text-danger'],
+                    ['💎 嚴重折價 (≤-1%)', severeDiscounts.length, '檔享折價安全邊際', 'text-success'],
+                    ['偏離極值', maxPrem ? `+${Number(maxPrem.ratio).toFixed(2)}%` : '-', maxPrem ? `${maxPrem.code} ${maxPrem.name.slice(0,6)}` : '', 'text-warning']
+                ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+            }
+
+            // Top 10 溢價 (追高警示榜)
+            const topPrem = [...data].sort((a,b) => Number(b.ratio || 0) - Number(a.ratio || 0)).slice(0, 10);
+            const topPremBody = document.getElementById('topPremiumsBody');
+            if (topPremBody) {
+                topPremBody.innerHTML = topPrem.map(item => `<tr>
+                    <td class="font-monospace fw-bold text-danger">${item.code}</td>
+                    <td class="fw-bold">${item.name}</td>
+                    <td class="text-end font-monospace">$${Number(item.trade_price).toFixed(2)}</td>
+                    <td class="text-end font-monospace text-primary">$${Number(item.nav).toFixed(2)}</td>
+                    <td class="text-end font-monospace fw-bold text-danger">+${Number(item.ratio).toFixed(2)}%</td>
+                    <td class="text-center"><span class="badge bg-danger">${item.status}</span></td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查看</button></td>
+                </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted">無資料</td></tr>';
+            }
+
+            // Top 10 折價 (撿便宜機會榜)
+            const topDisc = [...data].sort((a,b) => Number(a.ratio || 0) - Number(b.ratio || 0)).slice(0, 10);
+            const topDiscBody = document.getElementById('topDiscountsBody');
+            if (topDiscBody) {
+                topDiscBody.innerHTML = topDisc.map(item => `<tr>
+                    <td class="font-monospace fw-bold text-success">${item.code}</td>
+                    <td class="fw-bold">${item.name}</td>
+                    <td class="text-end font-monospace">$${Number(item.trade_price).toFixed(2)}</td>
+                    <td class="text-end font-monospace text-primary">$${Number(item.nav).toFixed(2)}</td>
+                    <td class="text-end font-monospace fw-bold text-success">${Number(item.ratio).toFixed(2)}%</td>
+                    <td class="text-center"><span class="badge bg-success">${item.status}</span></td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查看</button></td>
+                </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted">無資料</td></tr>';
+            }
+
+            applyDiscountFilters();
+        }
+
+        function applyDiscountFilters() {
+            if (!discountPremiumRaw || !Array.isArray(discountPremiumRaw.data)) return;
+            const query = (document.getElementById('discountSearchInput')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('discountSortSelect')?.value || 'ratio_desc';
+
+            let filtered = discountPremiumRaw.data.filter(item => {
+                if (query && !item.code.toUpperCase().includes(query) && !item.name.toUpperCase().includes(query)) return false;
+                if (currentDiscountFilter === 'severe_premium') return Number(item.ratio || 0) >= 1.0;
+                if (currentDiscountFilter === 'severe_discount') return Number(item.ratio || 0) <= -1.0;
+                if (currentDiscountFilter === 'listed') return item.market_type === '上市';
+                if (currentDiscountFilter === 'otc') return item.market_type === '上櫃';
+                return true;
+            });
+
+            filtered.sort((a, b) => {
+                const ra = Number(a.ratio || 0), rb = Number(b.ratio || 0);
+                const pa = Number(a.trade_price || 0), pb = Number(b.trade_price || 0);
+                const na = Number(a.nav || 0), nb = Number(b.nav || 0);
+                if (sortType === 'ratio_desc') return rb - ra;
+                if (sortType === 'ratio_asc') return ra - rb;
+                if (sortType === 'price_desc') return pb - pa;
+                if (sortType === 'nav_desc') return nb - na;
+                return 0;
+            });
+
+            const countEl = document.getElementById('discountTableCount');
+            if (countEl) countEl.innerText = `符合條件：${filtered.length} 檔 ETF`;
+
+            const tbody = document.getElementById('discountTableBody');
+            if (tbody) {
+                tbody.innerHTML = filtered.map(item => {
+                    const rVal = Number(item.ratio || 0);
+                    const rCol = rVal > 0 ? 'text-danger' : (rVal < 0 ? 'text-success' : 'text-muted');
+                    const diffVal = Number(item.diff || 0);
+                    const diffCol = diffVal > 0 ? 'text-danger' : (diffVal < 0 ? 'text-success' : 'text-muted');
+                    let bClass = 'bg-secondary';
+                    if (item.status && item.status.includes('嚴重溢價')) bClass = 'bg-danger';
+                    else if (item.status && item.status.includes('嚴重折價')) bClass = 'bg-success';
+                    else if (item.status && item.status.includes('溢價')) bClass = 'bg-warning text-dark';
+                    else if (item.status && item.status.includes('折價')) bClass = 'bg-info text-dark';
+                    return `<tr>
+                        <td class="font-monospace fw-bold">${item.code}</td>
+                        <td class="fw-bold">${item.name}</td>
+                        <td><span class="badge bg-light text-secondary border">${item.market_type || '-'}</span></td>
+                        <td class="text-end font-monospace fw-bold">$${Number(item.trade_price).toFixed(2)}</td>
+                        <td class="text-end font-monospace text-primary fw-bold">$${Number(item.nav).toFixed(2)}</td>
+                        <td class="text-end font-monospace ${diffCol}">${diffVal > 0 ? '+' : ''}${diffVal.toFixed(2)}</td>
+                        <td class="text-end font-monospace fw-bold ${rCol}">${rVal > 0 ? '+' : ''}${rVal.toFixed(2)}%</td>
+                        <td class="text-center"><span class="badge ${bClass}">${item.status}</span></td>
+                        <td class="text-end font-monospace text-muted">$${Number(item.prev_nav || 0).toFixed(2)}</td>
+                        <td class="small text-muted font-monospace">${item.time || '-'}</td>
+                        <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查看籌碼</button></td>
+                    </tr>`;
+                }).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">無符合條件之折溢價資料</td></tr>';
+            }
+        }
+
+        // --- 7.2 ETF 除權息與配息行事曆 ---
+        let currentDividendFilter = 'all';
+
+        function setDividendFilter(filterType, btn) {
+            currentDividendFilter = filterType;
+            document.querySelectorAll('#dividendFilterGroup button').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            applyDividendFilters();
+        }
+
+        function renderDividendCalendarView() {
+            if (!dividendCalendarRaw || !Array.isArray(dividendCalendarRaw.events)) return;
+            const events = dividendCalendarRaw.events;
+            const updateTimeEl = document.getElementById('dividendUpdateTime');
+            if (updateTimeEl) updateTimeEl.innerText = dividendCalendarRaw.updated_at || '-';
+
+            // KPI 計算
+            const totalEvents = events.length;
+            const maxDiv = [...events].sort((a,b) => Number(b.cash_dividend || 0) - Number(a.cash_dividend || 0))[0];
+            const sortedByDate = [...events].sort((a,b) => a.ex_date.localeCompare(b.ex_date));
+            const todayKey = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei' }).format(new Date());
+            const upcomingEvents = sortedByDate.filter(item => item.ex_date >= todayKey);
+            const nearestEvent = upcomingEvents[0];
+            const etfCount = events.filter(e => e.code.startsWith('00')).length;
+
+            const kpiContainer = document.getElementById('dividendKpiCards');
+            if (kpiContainer) {
+                kpiContainer.innerHTML = [
+                    ['預告除權息總數', totalEvents, '筆日程事件', 'text-primary'],
+                    ['最高每股配息', maxDiv ? `$${maxDiv.cash_dividend_str} 元` : '-', maxDiv ? `${maxDiv.code} ${maxDiv.name}` : '', 'text-success'],
+                    ['最近除息日期', nearestEvent ? nearestEvent.ex_date : '-', nearestEvent ? `${nearestEvent.code} ${nearestEvent.name}` : '', 'text-warning'],
+                    ['ETF 除息檔數', etfCount, `個股 ${totalEvents - etfCount} 檔`, 'text-info']
+                ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+            }
+
+            // 近期除息時間軸 (Timeline Cards)
+            const timelineContainer = document.getElementById('dividendTimelineCards');
+            if (timelineContainer) {
+                const upcoming = upcomingEvents.slice(0, 6);
+                timelineContainer.innerHTML = upcoming.map(item => `
+                    <div class="col-md-4 col-lg-2">
+                        <div class="card p-3 h-100 border-start border-warning border-3 shadow-sm bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="badge bg-warning text-dark font-monospace">${item.ex_date}</span>
+                                <span class="small text-muted">${item.ex_type || '除息'}</span>
+                            </div>
+                            <div class="fw-bold fs-6 font-monospace text-primary">${item.code}</div>
+                            <div class="fw-bold small text-truncate" title="${item.name}">${item.name}</div>
+                            <div class="mt-2 text-success fw-bold fs-5">$${item.cash_dividend_str} <span class="fs-6 text-muted">元</span></div>
+                            <div class="small text-muted mt-1">最後買進: <b>${item.last_buy_date}</b></div>
+                            <div class="mt-2"><button class="btn btn-outline-secondary btn-sm w-100 py-0" onclick="navigateToSecurity('${item.code}')">查看詳情</button></div>
+                        </div>
+                    </div>
+                `).join('') || '<div class="col-12 text-muted">目前無預告日程</div>';
+            }
+
+            applyDividendFilters();
+        }
+
+        function applyDividendFilters() {
+            if (!dividendCalendarRaw || !Array.isArray(dividendCalendarRaw.events)) return;
+            const query = (document.getElementById('dividendSearchInput')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('dividendSortSelect')?.value || 'date_asc';
+
+            let filtered = dividendCalendarRaw.events.filter(item => {
+                if (query && !item.code.toUpperCase().includes(query) && !item.name.toUpperCase().includes(query)) return false;
+                const isEtf = item.code.startsWith('00');
+                if (currentDividendFilter === 'etf' && !isEtf) return false;
+                if (currentDividendFilter === 'stock' && isEtf) return false;
+                return true;
+            });
+
+            filtered.sort((a, b) => {
+                if (sortType === 'date_asc') return a.ex_date.localeCompare(b.ex_date);
+                if (sortType === 'date_desc') return b.ex_date.localeCompare(a.ex_date);
+                if (sortType === 'cash_desc') return Number(b.cash_dividend || 0) - Number(a.cash_dividend || 0);
+                return 0;
+            });
+
+            const countEl = document.getElementById('dividendTableCount');
+            if (countEl) countEl.innerText = `符合條件：${filtered.length} 筆除息日程`;
+
+            const tbody = document.getElementById('dividendTableBody');
+            if (tbody) {
+                tbody.innerHTML = filtered.map(item => `<tr>
+                    <td class="font-monospace fw-bold text-warning">${item.ex_date}</td>
+                    <td class="font-monospace fw-bold text-dark">${item.last_buy_date}</td>
+                    <td class="font-monospace fw-bold text-primary">${item.code}</td>
+                    <td class="fw-bold">${item.name}</td>
+                    <td><span class="badge ${item.code.startsWith('00') ? 'bg-primary' : 'bg-secondary'}">${item.code.startsWith('00') ? 'ETF' : '個股'}</span></td>
+                    <td><span class="badge bg-light text-secondary border">${item.ex_type || '除息'}</span></td>
+                    <td class="text-end font-monospace fw-bold text-success fs-6">$${item.cash_dividend_str}</td>
+                    <td class="text-end font-monospace text-muted">${item.ref_price && item.ref_price !== '0.00' ? `$${item.ref_price}` : '-'}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查看</button></td>
+                </tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-4">無符合條件之除息預告</td></tr>';
+            }
+        }
+
+        // --- 7.3 三大法人買賣超日報 ---
+        let currentInstFilter = 'all';
+        let currentInstMetric = 'amount';
+
+        function instLots(item, key) { return Number(item?.[`${key}_lots`] || 0); }
+        function instAmount(item, key) {
+            const candidates = [`${key}_amount`, `${key}_value`, `${key}_amt`];
+            for (const field of candidates) {
+                if (item && item[field] !== undefined && item[field] !== null && item[field] !== '') return Number(item[field]) || 0;
+            }
+            const price = Number(item?.price || item?.close || item?.last_price || twseLiveMarketData[item?.code]?.price || 0);
+            return instLots(item, key) * price * 1000;
+        }
+        function instValue(item, key) { return currentInstMetric === 'amount' ? instAmount(item, key) : instLots(item, key); }
+        function fmtInstValue(value) {
+            const n = Number(value || 0);
+            if (currentInstMetric === 'amount') return `${n >= 0 ? '+' : ''}${(n / 100000000).toFixed(2)} 億`;
+            return `${n >= 0 ? '+' : ''}${n.toLocaleString()} 張`;
+        }
+        function instColor(value) { return value > 0 ? 'text-danger' : (value < 0 ? 'text-success' : 'text-muted'); }
+
+        function setInstMetric(metric, btn) {
+            currentInstMetric = metric;
+            document.querySelectorAll('#instMetricGroup button').forEach(b => b.classList.remove('active', 'btn-primary'));
+            document.querySelectorAll('#instMetricGroup button').forEach(b => b.classList.add('btn-outline-primary'));
+            if (btn) { btn.classList.add('active', 'btn-primary'); btn.classList.remove('btn-outline-primary'); }
+            renderInstitutionalView();
+        }
+
+        function setInstFilter(filterType, btn) {
+            currentInstFilter = filterType;
+            document.querySelectorAll('#instFilterGroup button').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            applyInstFilters();
+        }
+
+        function renderInstitutionalView() {
+            if (!institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
+            const data = institutionalRaw.data;
+            const tradeDateEl = document.getElementById('instTradeDate');
+            if (tradeDateEl) tradeDateEl.innerText = institutionalRaw.date || '-';
+
+            // KPI 以金額優先，張數放在副標；沒有金額欄位時以價格×張數估算。
+            const sumForeign = data.reduce((sum, d) => sum + instAmount(d, 'foreign'), 0);
+            const sumTrust = data.reduce((sum, d) => sum + instAmount(d, 'trust'), 0);
+            const sumDealer = data.reduce((sum, d) => sum + instAmount(d, 'dealer'), 0);
+            const sumTotal = data.reduce((sum, d) => sum + instAmount(d, 'total'), 0);
+            const lotForeign = data.reduce((sum, d) => sum + instLots(d, 'foreign'), 0);
+            const lotTrust = data.reduce((sum, d) => sum + instLots(d, 'trust'), 0);
+            const lotDealer = data.reduce((sum, d) => sum + instLots(d, 'dealer'), 0);
+            const lotTotal = data.reduce((sum, d) => sum + instLots(d, 'total'), 0);
+            const fmtKpiAmount = (n) => `${n > 0 ? '+' : ''}${(n / 100000000).toFixed(2)} 億`;
+            const kpiContainer = document.getElementById('instKpiCards');
+            if (kpiContainer) {
+                kpiContainer.innerHTML = [
+                    ['三大法人合計買賣超', fmtKpiAmount(sumTotal), `全市場｜${lotTotal.toLocaleString()} 張`, instColor(sumTotal)],
+                    ['投信買賣超', fmtKpiAmount(sumTrust), `ETF 換股動能｜${lotTrust.toLocaleString()} 張`, instColor(sumTrust)],
+                    ['外資及陸資買賣超', fmtKpiAmount(sumForeign), `國際資金進出｜${lotForeign.toLocaleString()} 張`, instColor(sumForeign)],
+                    ['自營商買賣超', fmtKpiAmount(sumDealer), `含避險與自行買賣｜${lotDealer.toLocaleString()} 張`, instColor(sumDealer)]
+                ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+            }
+
+            // Top 10 投信買超
+            const topTrust = [...data].sort((a,b) => instValue(b, 'trust') - instValue(a, 'trust')).slice(0, 10);
+            const trustBody = document.getElementById('topTrustBuyBody');
+            if (trustBody) {
+                trustBody.innerHTML = topTrust.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold ${instColor(instValue(item, 'trust'))}">${fmtInstValue(instValue(item, 'trust'))}</td>
+                    <td class="text-end font-monospace ${instColor(instValue(item, 'total'))}">${fmtInstValue(instValue(item, 'total'))}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查</button></td>
+                </tr>`).join('');
+            }
+
+            // Top 10 外資買超
+            const topForeign = [...data].sort((a,b) => instValue(b, 'foreign') - instValue(a, 'foreign')).slice(0, 10);
+            const foreignBody = document.getElementById('topForeignBuyBody');
+            if (foreignBody) {
+                foreignBody.innerHTML = topForeign.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold ${instColor(instValue(item, 'foreign'))}">${fmtInstValue(instValue(item, 'foreign'))}</td>
+                    <td class="text-end font-monospace ${instColor(instValue(item, 'total'))}">${fmtInstValue(instValue(item, 'total'))}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查</button></td>
+                </tr>`).join('');
+            }
+
+            // Top 10 三大法人合計買超
+            const topTotal = [...data].sort((a,b) => instValue(b, 'total') - instValue(a, 'total')).slice(0, 10);
+            const totalBody = document.getElementById('topTotalBuyBody');
+            if (totalBody) {
+                totalBody.innerHTML = topTotal.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold ${instColor(instValue(item, 'total'))}">${fmtInstValue(instValue(item, 'total'))}</td>
+                    <td class="text-end font-monospace ${instColor(instValue(item, 'trust'))}">${fmtInstValue(instValue(item, 'trust'))}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查</button></td>
+                </tr>`).join('');
+            }
+
+            const unit = currentInstMetric === 'amount' ? '金額' : '張數';
+            [['topTrustMetricHead', `投信買超${unit}`], ['topTrustTotalHead', `合計${unit}`],
+             ['topForeignMetricHead', `外資買超${unit}`], ['topForeignTotalHead', `合計${unit}`],
+             ['topTotalMetricHead', `合計買超${unit}`], ['topTotalTrustHead', `投信${unit}`]].forEach(([id, text]) => {
+                const el = document.getElementById(id); if (el) el.innerText = text;
+            });
+            applyInstFilters();
+        }
+
+        function applyInstFilters() {
+            if (!institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
+            const query = (document.getElementById('instSearchInput')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('instSortSelect')?.value || 'total_desc';
+
+            let filtered = institutionalRaw.data.filter(item => {
+                if (query && !item.code.toUpperCase().includes(query) && !item.name.toUpperCase().includes(query)) return false;
+                if (currentInstFilter === 'etf' && !item.is_etf) return false;
+                if (currentInstFilter === 'stock' && item.is_etf) return false;
+                return true;
+            });
+
+            filtered.sort((a, b) => {
+                if (sortType === 'total_desc') return instValue(b, 'total') - instValue(a, 'total');
+                if (sortType === 'total_asc') return instValue(a, 'total') - instValue(b, 'total');
+                if (sortType === 'trust_desc') return instValue(b, 'trust') - instValue(a, 'trust');
+                if (sortType === 'foreign_desc') return instValue(b, 'foreign') - instValue(a, 'foreign');
+                if (sortType === 'dealer_desc') return instValue(b, 'dealer') - instValue(a, 'dealer');
+                return 0;
+            });
+
+            const countEl = document.getElementById('instTableCount');
+            if (countEl) countEl.innerText = `符合條件：${filtered.length} 檔標的`;
+
+            const tbody = document.getElementById('instTableBody');
+            if (tbody) {
+                const fmtCell = (item, key) => {
+                    const n = instValue(item, key);
+                    return `<td class="text-end font-monospace fw-bold ${instColor(n)}">${fmtInstValue(n)}</td>`;
+                };
+                tbody.innerHTML = filtered.map(item => `<tr>
+                    <td class="font-monospace fw-bold">${item.code}</td>
+                    <td class="fw-bold">${item.name}</td>
+                    <td><span class="badge ${item.is_etf ? 'bg-primary' : 'bg-secondary'}">${item.is_etf ? 'ETF' : '個股'}</span></td>
+                    ${fmtCell(item, 'foreign')}
+                    ${fmtCell(item, 'trust')}
+                    ${fmtCell(item, 'dealer')}
+                    ${fmtCell(item, 'total')}
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查看分析</button></td>
+                </tr>`).join('') || '<tr><td colspan="8" class="text-center text-muted py-4">無符合條件之法人買賣超資料</td></tr>';
+                const unit = currentInstMetric === 'amount' ? '金額' : '張';
+                [['instForeignHead', `外資及陸資 (${unit})`], ['instTrustHead', `投信買賣超 (${unit})`], ['instDealerHead', `自營商買賣超 (${unit})`], ['instTotalHead', `三大法人合計 (${unit})`]].forEach(([id, text]) => { const el = document.getElementById(id); if (el) el.innerText = text; });
+            }
+        }
+
+        // --- 7.4 發行單位數與資金流向 ---
+        function renderSharesFlowView() {
+            if (!sharesFlowRaw || !Array.isArray(sharesFlowRaw.data)) return;
+            const data = sharesFlowRaw.data;
+            const tradeDateEl = document.getElementById('flowTradeDate');
+            if (tradeDateEl) tradeDateEl.innerText = sharesFlowRaw.date || '-';
+            const updateTimeEl = document.getElementById('flowUpdateTime');
+            if (updateTimeEl) updateTimeEl.innerText = sharesFlowRaw.updated_at || '-';
+
+            // KPI 計算
+            const totalAum = data.reduce((sum, d) => sum + Number(d.aum_billion || 0), 0);
+            const totalLots = data.reduce((sum, d) => sum + Number(d.total_lots || 0), 0);
+            const maxInflow = [...data].sort((a,b) => Number(b.net_flow_billion || 0) - Number(a.net_flow_billion || 0))[0];
+            const maxOutflow = [...data].sort((a,b) => Number(a.net_flow_billion || 0) - Number(b.net_flow_billion || 0))[0];
+
+            const kpiContainer = document.getElementById('flowKpiCards');
+            if (kpiContainer) {
+                kpiContainer.innerHTML = [
+                    ['全市場 ETF 總規模 (AUM)', `${totalAum.toFixed(1)} 億元`, `總發行 ${Number(totalLots).toLocaleString()} 張`, 'text-primary'],
+                    ['單日吸金王 (淨流入)', maxInflow && maxInflow.net_flow_billion > 0 ? `+${maxInflow.net_flow_billion.toFixed(3)} 億元` : '-', maxInflow ? `${maxInflow.code} ${maxInflow.name.slice(0,8)}` : '', 'text-danger'],
+                    ['資金撤退最多 (淨流出)', maxOutflow && maxOutflow.net_flow_billion < 0 ? `${maxOutflow.net_flow_billion.toFixed(3)} 億元` : '-', maxOutflow ? `${maxOutflow.code} ${maxOutflow.name.slice(0,8)}` : '', 'text-success'],
+                    ['統計檔數', `${data.length} 檔 ETF`, '臺灣證券交易所 MIS 資料', 'text-info']
+                ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+            }
+
+            // Top 10 資產規模 (巨無霸榜)
+            const topScale = [...data].sort((a,b) => Number(b.aum_billion || 0) - Number(a.aum_billion || 0)).slice(0, 10);
+            const topScaleBody = document.getElementById('topScaleBody');
+            if (topScaleBody) {
+                topScaleBody.innerHTML = topScale.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold text-primary">${Number(item.aum_billion).toFixed(2)}</td>
+                    <td class="text-end font-monospace small">${Number(item.total_lots).toLocaleString()}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查</button></td>
+                </tr>`).join('');
+            }
+
+            // Top 10 單日資金吸金王 (淨流入)
+            const topInflow = [...data].filter(d => Number(d.net_flow_billion || 0) > 0).sort((a,b) => Number(b.net_flow_billion || 0) - Number(a.net_flow_billion || 0)).slice(0, 10);
+            const topInflowBody = document.getElementById('topInflowBody');
+            if (topInflowBody) {
+                topInflowBody.innerHTML = topInflow.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold text-danger">+${Number(item.net_flow_billion).toFixed(3)}</td>
+                    <td class="text-end font-monospace small text-danger">+${Number(item.change_lots).toLocaleString()}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查</button></td>
+                </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted">無淨流入</td></tr>';
+            }
+
+            // Top 10 單日資金撤退榜 (淨流出)
+            const topOutflow = [...data].filter(d => Number(d.net_flow_billion || 0) < 0).sort((a,b) => Number(a.net_flow_billion || 0) - Number(b.net_flow_billion || 0)).slice(0, 10);
+            const topOutflowBody = document.getElementById('topOutflowBody');
+            if (topOutflowBody) {
+                topOutflowBody.innerHTML = topOutflow.map(item => `<tr>
+                    <td><b class="font-monospace">${item.code}</b> <span class="small text-muted">${item.name.slice(0,6)}</span></td>
+                    <td class="text-end font-monospace fw-bold text-success">${Number(item.net_flow_billion).toFixed(3)}</td>
+                    <td class="text-end font-monospace small text-success">${Number(item.change_lots).toLocaleString()}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查</button></td>
+                </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted">無淨流出</td></tr>';
+            }
+
+            applyFlowFilters();
+        }
+
+        function applyFlowFilters() {
+            if (!sharesFlowRaw || !Array.isArray(sharesFlowRaw.data)) return;
+            const query = (document.getElementById('flowSearchInput')?.value || '').trim().toUpperCase();
+            const sortType = document.getElementById('flowSortSelect')?.value || 'aum_desc';
+
+            let filtered = sharesFlowRaw.data.filter(item => {
+                if (query && !item.code.toUpperCase().includes(query) && !item.name.toUpperCase().includes(query)) return false;
+                return true;
+            });
+
+            filtered.sort((a, b) => {
+                const aumA = Number(a.aum_billion || 0), aumB = Number(b.aum_billion || 0);
+                const flowA = Number(a.net_flow_billion || 0), flowB = Number(b.net_flow_billion || 0);
+                const lotsA = Number(a.total_lots || 0), lotsB = Number(b.total_lots || 0);
+                const chgA = Number(a.change_lots || 0), chgB = Number(b.change_lots || 0);
+                if (sortType === 'aum_desc') return aumB - aumA;
+                if (sortType === 'inflow_desc') return flowB - flowA;
+                if (sortType === 'outflow_desc') return flowA - flowB;
+                if (sortType === 'units_desc') return lotsB - lotsA;
+                if (sortType === 'change_desc') return chgB - chgA;
+                return 0;
+            });
+
+            const countEl = document.getElementById('flowTableCount');
+            if (countEl) countEl.innerText = `符合條件：${filtered.length} 檔 ETF`;
+
+            const tbody = document.getElementById('flowTableBody');
+            if (tbody) {
+                tbody.innerHTML = filtered.map(item => {
+                    const flowVal = Number(item.net_flow_billion || 0);
+                    const flowCol = flowVal > 0 ? 'text-danger' : (flowVal < 0 ? 'text-success' : 'text-muted');
+                    const chgLots = Number(item.change_lots || 0);
+                    const chgCol = chgLots > 0 ? 'text-danger' : (chgLots < 0 ? 'text-success' : 'text-muted');
+                    return `<tr>
+                        <td class="font-monospace fw-bold">${item.code}</td>
+                        <td class="fw-bold">${item.name}</td>
+                        <td class="text-end font-monospace">$${Number(item.price || 0).toFixed(2)}</td>
+                        <td class="text-end font-monospace text-primary">$${Number(item.nav || 0).toFixed(2)}</td>
+                        <td class="text-end font-monospace">${Number(item.total_lots || 0).toLocaleString()}</td>
+                        <td class="text-end font-monospace fw-bold ${chgCol}">${chgLots > 0 ? '+' : ''}${chgLots.toLocaleString()}</td>
+                        <td class="text-end font-monospace fw-bold text-primary">${Number(item.aum_billion || 0).toFixed(2)}</td>
+                        <td class="text-end font-monospace fw-bold ${flowCol}">${flowVal > 0 ? '+' : ''}${flowVal.toFixed(3)}</td>
+                        <td class="small text-muted font-monospace">${item.time || '-'}</td>
+                        <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToEtf('${item.code}')">查看籌碼</button></td>
+                    </tr>`;
+                }).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">無符合條件之單位數與流向資料</td></tr>';
+            }
+        }
+
+        // --- 7.5 通用跨介面導覽捷徑 ---
+        function navigateToEtf(code) {
+            switchTab('content-a', 'tab-a');
+            selectEtf(code);
+        }
+
+        function navigateToSecurity(code) {
+            if (code.startsWith('00')) {
+                navigateToEtf(code);
+            } else {
+                switchTab('content-b', 'tab-b');
+                const inp = document.getElementById('stockSearchInput');
+                if (inp) {
+                    inp.value = code;
+                    searchStockDistribution();
+                }
+            }
+        }
+
       </script>
     </body>
     </html>
@@ -4444,7 +5731,11 @@ def main():
                                  .replace("__ETF_NAME_PLACEHOLDER__", etf_name_json)\
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)\
                                  .replace("__PRICE_HISTORY_PLACEHOLDER__", price_history_json)\
-                                 .replace("__GEMINI_PLACEHOLDER__", gemini_insight_json)
+                                 .replace("__GEMINI_PLACEHOLDER__", gemini_insight_json)\
+                                 .replace("__DISCOUNT_PLACEHOLDER__", discount_json)\
+                                 .replace("__DIVIDEND_PLACEHOLDER__", dividend_json)\
+                                 .replace("__INSTITUTIONAL_PLACEHOLDER__", institutional_json)\
+                                 .replace("__SHARES_FLOW_PLACEHOLDER__", shares_flow_json)
 
     # 互動頁面包含 JavaScript 與 Chart.js；使用 components.html 可確保
     # Streamlit Cloud 重新整理後仍能執行嵌入腳本，避免 data URL iframe 黑屏。
