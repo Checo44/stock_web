@@ -1398,9 +1398,18 @@ def main():
           border-bottom: 1px solid #dee2e6;
           background-color: #fff !important;
         }
-        .home-table { min-width: 1180px; }
+        .home-table { min-width: 1500px; table-layout: fixed; width: 100%; }
         .home-table th, .home-table td { white-space: nowrap; vertical-align: middle; }
-        .home-table th:nth-child(2), .home-table td:nth-child(2) { min-width: 150px; }
+        .home-table th:nth-child(1), .home-table td:nth-child(1) { width: 8%; }
+        .home-table th:nth-child(2), .home-table td:nth-child(2) { width: 16%; }
+        .home-table th:nth-child(3), .home-table td:nth-child(3) { width: 9%; }
+        .home-table th:nth-child(4), .home-table td:nth-child(4) { width: 8%; }
+        .home-table th:nth-child(5), .home-table td:nth-child(5) { width: 9%; }
+        .home-table th:nth-child(6), .home-table td:nth-child(6) { width: 10%; }
+        .home-table th:nth-child(7), .home-table td:nth-child(7) { width: 9%; }
+        .home-table th:nth-child(8), .home-table td:nth-child(8) { width: 8%; }
+        .home-table th:nth-child(9), .home-table td:nth-child(9) { width: 10%; }
+        .home-table th:nth-child(10), .home-table td:nth-child(10), .home-table th:nth-child(11), .home-table td:nth-child(11) { width: 6.5%; }
         #content-home .card { overflow: hidden; }
         #content-home .table-responsive { border-radius: 12px; }
 
@@ -2000,8 +2009,8 @@ def main():
                   <label class="form-label fw-bold text-secondary">比較區間</label>
                   <select id="stockChangeRange" class="form-select">
                     <option value="1" selected>前一交易日</option>
-                    <option value="5">前 5 個交易日</option>
-                    <option value="20">前 20 個交易日</option>
+                    <option value="5">週變動比較（前 5 個交易日）</option>
+                    <option value="20">月變動比較（前 20 個交易日）</option>
                   </select>
                 </div>
                 <div class="col-md-1 pt-md-4">
@@ -2249,6 +2258,23 @@ def main():
               </div>
             </div>
             <div class="row g-3 mb-4" id="heatSummary"></div>
+
+            <div class="card mb-4 shadow-sm">
+              <div class="card-header bg-white text-primary fw-bold d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-diagram-3-fill me-2"></i>產業買賣超金額分析</span>
+                <span class="small text-muted">依所選區間估算</span>
+              </div>
+              <div class="row g-0">
+                <div class="col-lg-6 border-end">
+                  <div class="px-3 pt-3 fw-bold text-danger">產業買超金額 Top 10</div>
+                  <div class="table-responsive"><table class="table table-sm table-hover align-middle"><thead><tr><th>排行</th><th>產業</th><th class="text-end">估算金額</th><th class="text-end">淨股數</th></tr></thead><tbody id="heatIndustryBuyBody"></tbody></table></div>
+                </div>
+                <div class="col-lg-6">
+                  <div class="px-3 pt-3 fw-bold text-success">產業賣超金額 Top 10</div>
+                  <div class="table-responsive"><table class="table table-sm table-hover align-middle"><thead><tr><th>排行</th><th>產業</th><th class="text-end">估算金額</th><th class="text-end">淨股數</th></tr></thead><tbody id="heatIndustrySellBody"></tbody></table></div>
+                </div>
+              </div>
+            </div>
 
             <ul class="nav nav-pills mb-4" id="heatTypeTabs" role="tablist">
               <li class="nav-item" role="presentation">
@@ -2667,50 +2693,20 @@ def main():
               </div>
             </div>
 
-            <!-- 三大排行榜 (投信買超、外資買超、三大法人合計買超) -->
+            <!-- 三大排行榜：固定外資 → 投信 → 三大法人，並同時提供買超與賣超 -->
             <div class="row g-4 mb-4">
-              <div class="col-lg-4">
-                <div class="card h-100 shadow-sm border-top border-primary border-3">
-                  <div class="card-header bg-white text-primary fw-bold d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-building me-2"></i>🏢 投信買超 Top 10</span>
-                    <span class="badge bg-primary-subtle text-primary border small">ETF換股動能</span>
-                  </div>
-                  <div class="table-responsive">
-                    <table class="table table-sm table-hover align-middle mb-0">
-                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTrustMetricHead">投信買超金額</th><th class="text-end" id="topTrustTotalHead">合計金額</th><th>動作</th></tr></thead>
-                      <tbody id="topTrustBuyBody"></tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-              <div class="col-lg-4">
-                <div class="card h-100 shadow-sm border-top border-danger border-3">
-                  <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-globe2 me-2"></i>🏆 外資買超 Top 10</span>
-                    <span class="badge bg-danger-subtle text-danger border small">外資偏多佈局</span>
-                  </div>
-                  <div class="table-responsive">
-                    <table class="table table-sm table-hover align-middle mb-0">
-                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topForeignMetricHead">外資買超金額</th><th class="text-end" id="topForeignTotalHead">合計金額</th><th>動作</th></tr></thead>
-                      <tbody id="topForeignBuyBody"></tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-              <div class="col-lg-4">
-                <div class="card h-100 shadow-sm border-top border-warning border-3">
-                  <div class="card-header bg-white text-dark fw-bold d-flex justify-content-between align-items-center">
-                    <span><i class="bi bi-stars me-2"></i>🌟 三大法人合計買超 Top 10</span>
-                    <span class="badge bg-warning-subtle text-dark border small">籌碼共識強烈</span>
-                  </div>
-                  <div class="table-responsive">
-                    <table class="table table-sm table-hover align-middle mb-0">
-                      <thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTotalMetricHead">合計買超金額</th><th class="text-end" id="topTotalTrustHead">投信金額</th><th>動作</th></tr></thead>
-                      <tbody id="topTotalBuyBody"></tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
+              <div class="col-xl-4"><div class="card shadow-sm border-top border-danger border-3">
+                <div class="card-header bg-white text-danger fw-bold"><i class="bi bi-globe2 me-2"></i>外資及陸資</div>
+                <div class="row g-0"><div class="col-md-6 border-end"><div class="small fw-bold text-danger px-3 pt-2">買超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topForeignMetricHead">金額</th><th>動作</th></tr></thead><tbody id="topForeignBuyBody"></tbody></table></div></div><div class="col-md-6"><div class="small fw-bold text-success px-3 pt-2">賣超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">金額</th><th>動作</th></tr></thead><tbody id="topForeignSellBody"></tbody></table></div></div></div>
+              </div></div>
+              <div class="col-xl-4"><div class="card shadow-sm border-top border-primary border-3">
+                <div class="card-header bg-white text-primary fw-bold"><i class="bi bi-building me-2"></i>投信</div>
+                <div class="row g-0"><div class="col-md-6 border-end"><div class="small fw-bold text-danger px-3 pt-2">買超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTrustMetricHead">金額</th><th>動作</th></tr></thead><tbody id="topTrustBuyBody"></tbody></table></div></div><div class="col-md-6"><div class="small fw-bold text-success px-3 pt-2">賣超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">金額</th><th>動作</th></tr></thead><tbody id="topTrustSellBody"></tbody></table></div></div></div>
+              </div></div>
+              <div class="col-xl-4"><div class="card shadow-sm border-top border-warning border-3">
+                <div class="card-header bg-white text-dark fw-bold"><i class="bi bi-stars me-2"></i>三大法人合計</div>
+                <div class="row g-0"><div class="col-md-6 border-end"><div class="small fw-bold text-danger px-3 pt-2">買超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end" id="topTotalMetricHead">金額</th><th>動作</th></tr></thead><tbody id="topTotalBuyBody"></tbody></table></div></div><div class="col-md-6"><div class="small fw-bold text-success px-3 pt-2">賣超 Top 10</div><div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0"><thead class="table-light"><tr><th>代號/名稱</th><th class="text-end">金額</th><th>動作</th></tr></thead><tbody id="topTotalSellBody"></tbody></table></div></div></div>
+              </div></div>
             </div>
 
             <!-- 完整買賣超明細表格 -->
@@ -4556,6 +4552,7 @@ def main():
             const selectedInstRange = parseInt(document.getElementById('stockChangeRange')?.value || '1');
             // 法人爬蟲若提供 history/daily/records，依個股頁所選區間加總；只有單日資料時仍顯示當日值。
             const instHistory = [
+                ...(Array.isArray(institutionalRaw?.data) ? institutionalRaw.data.filter(item => String(item.code || '') === String(targetCode) && item.date) : []),
                 ...(Array.isArray(institutionalRaw?.history) ? institutionalRaw.history : []),
                 ...(Array.isArray(institutionalRaw?.daily) ? institutionalRaw.daily : []),
                 ...(Array.isArray(institutionalRaw?.records) ? institutionalRaw.records : [])
@@ -4938,6 +4935,7 @@ def main():
             let newRows = globalRawData.filter(d => d.date === dNew);
 
             let stockStats = {};
+            let industryStats = {};
             let activeOldRows = oldRows.filter(r => isActiveEtf(r.etf));
             let activeNewRows = newRows.filter(r => isActiveEtf(r.etf));
             let allStocks = [...new Set([...activeOldRows.map(r => r.stock), ...activeNewRows.map(r => r.stock)])];
@@ -4970,9 +4968,14 @@ def main():
                     price: price,
                     estAmount: estAmount
                 };
+                const industry = sample.industry || tickerMappingData[sCode]?.industry || '未分類';
+                if (!industryStats[industry]) industryStats[industry] = { name: industry, diffVol: 0, estAmount: 0 };
+                industryStats[industry].diffVol += diffVol;
+                industryStats[industry].estAmount += estAmount;
             });
 
             let statsArr = Object.values(stockStats);
+            const industryArr = Object.values(industryStats);
             let domStats = statsArr.filter(x => x.isDomestic);
             let forStats = statsArr.filter(x => !x.isDomestic);
 
@@ -5023,6 +5026,14 @@ def main():
             document.getElementById('heatSellVolBodyDom').innerHTML = renderHeatTable(domSellVol, true, true);
             document.getElementById('heatBuyVolBodyFor').innerHTML = renderHeatTable(forBuyVol, true, false);
             document.getElementById('heatSellVolBodyFor').innerHTML = renderHeatTable(forSellVol, true, true);
+            const renderIndustryTable = (items, sell) => items.length ? items.slice(0, 10).map((item, idx) => `<tr>
+                <td><span class="rank-medal ${idx < 3 ? ['medal-1','medal-2','medal-3'][idx] : 'medal-other'}">${idx + 1}</span></td>
+                <td class="fw-bold">${item.name}</td>
+                <td class="text-end font-monospace fw-bold ${sell ? 'text-success' : 'text-danger'}">${(item.estAmount / 100000000).toFixed(2)} 億</td>
+                <td class="text-end font-monospace">${item.diffVol > 0 ? '+' : ''}${item.diffVol.toLocaleString()} 股</td>
+            </tr>`).join('') : '<tr><td colspan="4" class="text-center text-muted py-3">無排行數據</td></tr>';
+            document.getElementById('heatIndustryBuyBody').innerHTML = renderIndustryTable(industryArr.filter(x => x.estAmount > 0).sort((a, b) => b.estAmount - a.estAmount), false);
+            document.getElementById('heatIndustrySellBody').innerHTML = renderIndustryTable(industryArr.filter(x => x.estAmount < 0).sort((a, b) => a.estAmount - b.estAmount), true);
             const buyStocks = statsArr.filter(item => item.diffVol > 0).length;
             const sellStocks = statsArr.filter(item => item.diffVol < 0).length;
             const netVolume = statsArr.reduce((sum, item) => sum + item.diffVol, 0);
@@ -5491,10 +5502,10 @@ def main():
             const kpiContainer = document.getElementById('instKpiCards');
             if (kpiContainer) {
                 kpiContainer.innerHTML = [
-                    ['三大法人合計買賣超', fmtKpiAmount(sumTotal), `全市場｜${lotTotal.toLocaleString()} 張`, instColor(sumTotal)],
-                    ['投信買賣超', fmtKpiAmount(sumTrust), `ETF 換股動能｜${lotTrust.toLocaleString()} 張`, instColor(sumTrust)],
                     ['外資及陸資買賣超', fmtKpiAmount(sumForeign), `國際資金進出｜${lotForeign.toLocaleString()} 張`, instColor(sumForeign)],
-                    ['自營商買賣超', fmtKpiAmount(sumDealer), `含避險與自行買賣｜${lotDealer.toLocaleString()} 張`, instColor(sumDealer)]
+                    ['投信買賣超', fmtKpiAmount(sumTrust), `ETF 換股動能｜${lotTrust.toLocaleString()} 張`, instColor(sumTrust)],
+                    ['自營商買賣超', fmtKpiAmount(sumDealer), `含避險與自行買賣｜${lotDealer.toLocaleString()} 張`, instColor(sumDealer)],
+                    ['三大法人合計買賣超', fmtKpiAmount(sumTotal), `全市場｜${lotTotal.toLocaleString()} 張`, instColor(sumTotal)]
                 ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
             }
 
@@ -5533,6 +5544,21 @@ def main():
                     <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查</button></td>
                 </tr>`).join('');
             }
+
+            const renderInstRank = (metricKey, sell) => {
+                const rows = data.filter(item => (sell ? instValue(item, metricKey) < 0 : instValue(item, metricKey) > 0))
+                    .sort((a, b) => sell ? instValue(a, metricKey) - instValue(b, metricKey) : instValue(b, metricKey) - instValue(a, metricKey)).slice(0, 10);
+                return rows.map(item => `<tr>
+                    <td class="px-2"><b class="font-monospace">${item.code}</b> <span class="small text-muted">${String(item.name || '').slice(0, 5)}</span></td>
+                    <td class="text-end font-monospace fw-bold ${instColor(instValue(item, metricKey))}">${fmtInstValue(instValue(item, metricKey))}</td>
+                    <td class="text-center"><button class="btn btn-outline-primary btn-sm py-0" onclick="navigateToSecurity('${item.code}')">查</button></td>
+                </tr>`).join('') || '<tr><td colspan="3" class="text-center text-muted py-3">無資料</td></tr>';
+            };
+            [['topForeignBuyBody', 'foreign', false], ['topForeignSellBody', 'foreign', true],
+             ['topTrustBuyBody', 'trust', false], ['topTrustSellBody', 'trust', true],
+             ['topTotalBuyBody', 'total', false], ['topTotalSellBody', 'total', true]].forEach(([id, key, sell]) => {
+                const el = document.getElementById(id); if (el) el.innerHTML = renderInstRank(key, sell);
+            });
 
             const unit = currentInstMetric === 'amount' ? '金額' : '張數';
             [['topTrustMetricHead', `投信買超${unit}`], ['topTrustTotalHead', `合計${unit}`],
