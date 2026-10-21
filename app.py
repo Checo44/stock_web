@@ -1398,10 +1398,10 @@ def main():
           border-bottom: 1px solid #dee2e6;
           background-color: #fff !important;
         }
-        .home-table { min-width: 1500px; table-layout: fixed; width: 100%; }
-        .home-table th, .home-table td { white-space: nowrap; vertical-align: middle; }
+        .home-table { width: 100%; table-layout: fixed; }
+        .home-table th, .home-table td { white-space: nowrap; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
         .home-table th:nth-child(1), .home-table td:nth-child(1) { width: 8%; }
-        .home-table th:nth-child(2), .home-table td:nth-child(2) { width: 16%; }
+        .home-table th:nth-child(2), .home-table td:nth-child(2) { width: 15%; }
         .home-table th:nth-child(3), .home-table td:nth-child(3) { width: 9%; }
         .home-table th:nth-child(4), .home-table td:nth-child(4) { width: 8%; }
         .home-table th:nth-child(5), .home-table td:nth-child(5) { width: 9%; }
@@ -1410,6 +1410,7 @@ def main():
         .home-table th:nth-child(8), .home-table td:nth-child(8) { width: 8%; }
         .home-table th:nth-child(9), .home-table td:nth-child(9) { width: 10%; }
         .home-table th:nth-child(10), .home-table td:nth-child(10), .home-table th:nth-child(11), .home-table td:nth-child(11) { width: 6.5%; }
+        @media (max-width: 1400px) { .home-table { min-width: 1180px; } }
         #content-home .card { overflow: hidden; }
         #content-home .table-responsive { border-radius: 12px; }
 
@@ -1503,6 +1504,9 @@ def main():
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-institutional" onclick="switchTab('content-institutional', 'tab-institutional')"><i class="bi bi-bank text-info me-2"></i>三大法人買賣超</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="tab-industry" onclick="switchTab('content-industry', 'tab-industry')"><i class="bi bi-bar-chart-steps text-warning me-2"></i>產業法人買賣超</button>
           </li>
           <li class="nav-item">
             <button class="nav-link" id="tab-flow" onclick="switchTab('content-flow', 'tab-flow')"><i class="bi bi-cash-stack text-success me-2"></i>資金流向與規模</button>
@@ -2021,6 +2025,7 @@ def main():
             
             <div id="stockResultContainer" style="display: none;">
               <div class="row g-3 mb-4" id="stockCategorySummary"></div>
+              <div class="row g-3 mb-4" id="stockInsightCards"></div>
               <div class="card p-3 mb-4 border-start border-success border-4">
                 <div class="fw-bold text-success mb-2">Gemini 個股籌碼方向分析</div>
                 <div id="geminiStockInsight" class="small text-secondary" style="white-space: pre-line;">分析載入中…</div>
@@ -2749,6 +2754,32 @@ def main():
             </div>
           </div>
 
+          <!-- 產業法人買賣超 Tab -->
+          <div class="custom-tab-content" id="content-industry">
+            <div class="card p-4 bg-light border-0 mb-4">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                  <h4 class="fw-bold text-dark mb-1"><i class="bi bi-bar-chart-steps text-warning me-2"></i>產業法人買賣超金額分析</h4>
+                  <div class="text-muted small">依三大法人日報與個股產業分類彙總；金額優先，協助辨識法人資金集中流入與流出產業。</div>
+                </div>
+                <span class="badge bg-white text-secondary border" id="industryInstDate">-</span>
+              </div>
+            </div>
+            <div class="row g-3 mb-4" id="industryKpiCards"></div>
+            <div class="card p-3 shadow-sm">
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                <span class="fw-bold text-secondary">產業買賣超金額排行</span>
+                <input type="text" id="industrySearchInput" class="form-control form-control-sm" style="max-width:220px" placeholder="搜尋產業" oninput="applyIndustryFilter()">
+              </div>
+              <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                  <thead class="table-light"><tr><th>產業</th><th class="text-end">外資</th><th class="text-end">投信</th><th class="text-end">自營商</th><th class="text-end">三大法人合計</th><th class="text-end">買超筆數</th><th class="text-end">賣超筆數</th></tr></thead>
+                  <tbody id="industryInstBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
           <!-- 發行單位數與資金流向 Tab -->
           <div class="custom-tab-content" id="content-flow">
             <div class="card p-4 bg-light border-0 mb-4">
@@ -2768,7 +2799,7 @@ def main():
 
             <!-- 三大流向榜單 (巨無霸規模、單日吸金王、資金撤退榜) -->
             <div class="row g-4 mb-4">
-              <div class="col-lg-4">
+                <div class="col-lg-4 order-lg-2">
                 <div class="card h-100 shadow-sm border-top border-primary border-3">
                   <div class="card-header bg-white text-primary fw-bold d-flex justify-content-between align-items-center">
                     <span><i class="bi bi-trophy-fill me-2"></i>👑 ETF 資產規模巨無霸 Top 10</span>
@@ -2782,7 +2813,7 @@ def main():
                   </div>
                 </div>
               </div>
-              <div class="col-lg-4">
+                <div class="col-lg-4 order-lg-1">
                 <div class="card h-100 shadow-sm border-top border-danger border-3">
                   <div class="card-header bg-white text-danger fw-bold d-flex justify-content-between align-items-center">
                     <span><i class="bi bi-arrow-down-circle-fill me-2"></i>💰 單日吸金王 Top 10 (淨流入)</span>
@@ -2796,7 +2827,7 @@ def main():
                   </div>
                 </div>
               </div>
-              <div class="col-lg-4">
+                <div class="col-lg-4 order-lg-3">
                 <div class="card h-100 shadow-sm border-top border-success border-3">
                   <div class="card-header bg-white text-success fw-bold d-flex justify-content-between align-items-center">
                     <span><i class="bi bi-arrow-up-circle-fill me-2"></i>🏃 單日資金撤退榜 Top 10 (淨流出)</span>
@@ -3043,6 +3074,8 @@ def main():
                 renderDividendCalendarView();
             } else if (contentId === 'content-institutional') {
                 renderInstitutionalView();
+            } else if (contentId === 'content-industry') {
+                renderIndustryInstitutionalView();
             } else if (contentId === 'content-flow') {
                 renderSharesFlowView();
             }
@@ -4551,11 +4584,16 @@ def main():
             const stockInst = institutionalMap[targetCode];
             const selectedInstRange = parseInt(document.getElementById('stockChangeRange')?.value || '1');
             // 法人爬蟲若提供 history/daily/records，依個股頁所選區間加總；只有單日資料時仍顯示當日值。
+            const flattenInstHistory = (source) => {
+                if (Array.isArray(source)) return source;
+                if (!source || typeof source !== 'object') return [];
+                return Object.entries(source).flatMap(([date, rows]) => (Array.isArray(rows) ? rows : []).map(item => ({ ...item, date: item.date || date })));
+            };
             const instHistory = [
                 ...(Array.isArray(institutionalRaw?.data) ? institutionalRaw.data.filter(item => String(item.code || '') === String(targetCode) && item.date) : []),
-                ...(Array.isArray(institutionalRaw?.history) ? institutionalRaw.history : []),
-                ...(Array.isArray(institutionalRaw?.daily) ? institutionalRaw.daily : []),
-                ...(Array.isArray(institutionalRaw?.records) ? institutionalRaw.records : [])
+                ...flattenInstHistory(institutionalRaw?.history),
+                ...flattenInstHistory(institutionalRaw?.daily),
+                ...flattenInstHistory(institutionalRaw?.records)
             ].filter(item => String(item.code || '') === String(targetCode));
             const instRows = instHistory.length ? instHistory : (stockInst ? [stockInst] : []);
             const instDates = [...new Set(instRows.map(item => item.date).filter(Boolean))].sort((a,b) => new Date(a) - new Date(b));
@@ -4686,6 +4724,18 @@ def main():
                     <div class="small text-muted">所選區間變化：<b class="${diffClass}">${diffText}</b></div>
                 </div></div>`;
             }).join('');
+            const insightEl = document.getElementById('stockInsightCards');
+            if (insightEl) {
+                const top3Weight = latestHolders.slice().sort((a, b) => b.weight - a.weight).slice(0, 3).reduce((sum, row) => sum + row.weight, 0);
+                const etfDirection = totalVolDiff > 0 ? 'ETF 整體加碼' : (totalVolDiff < 0 ? 'ETF 整體減碼' : 'ETF 整體持平');
+                const instDirection = stockInstRange ? (stockInstRange.total_lots > 0 ? '法人整體買超' : (stockInstRange.total_lots < 0 ? '法人整體賣超' : '法人整體持平')) : '法人資料不足';
+                const agreement = stockInstRange && totalVolDiff !== 0 && stockInstRange.total_lots !== 0
+                    ? ((totalVolDiff > 0) === (stockInstRange.total_lots > 0) ? '方向一致' : '方向分歧') : '無法判定';
+                insightEl.innerHTML = [
+                    ['ETF 持股集中度', `${latestHolders.length} 檔 ETF 持有`, `前 3 大合計 ${top3Weight.toFixed(2)}%`, 'text-primary'],
+                    ['ETF／法人方向一致性', agreement, `${etfDirection}｜${instDirection}`, agreement === '方向一致' ? 'text-success' : 'text-warning']
+                ].map(item => `<div class="col-md-6"><div class="meta-card h-100"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+            }
             renderStockCategoryPieChart(stockCategoryStats);
 
             let totalVolStr = totalVolDiff > 0 ? `+${totalVolDiff.toLocaleString()} 股` : `${totalVolDiff.toLocaleString()} 股`;
@@ -5501,12 +5551,27 @@ def main():
             const fmtKpiAmount = (n) => `${n > 0 ? '+' : ''}${(n / 100000000).toFixed(2)} 億`;
             const kpiContainer = document.getElementById('instKpiCards');
             if (kpiContainer) {
-                kpiContainer.innerHTML = [
-                    ['外資及陸資買賣超', fmtKpiAmount(sumForeign), `國際資金進出｜${lotForeign.toLocaleString()} 張`, instColor(sumForeign)],
-                    ['投信買賣超', fmtKpiAmount(sumTrust), `ETF 換股動能｜${lotTrust.toLocaleString()} 張`, instColor(sumTrust)],
-                    ['自營商買賣超', fmtKpiAmount(sumDealer), `含避險與自行買賣｜${lotDealer.toLocaleString()} 張`, instColor(sumDealer)],
-                    ['三大法人合計買賣超', fmtKpiAmount(sumTotal), `全市場｜${lotTotal.toLocaleString()} 張`, instColor(sumTotal)]
-                ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
+                const side = (key, positive) => data.reduce((sum, item) => {
+                    const value = instAmount(item, key);
+                    return sum + (positive ? Math.max(value, 0) : Math.min(value, 0));
+                }, 0);
+                const sideLots = (key, positive) => data.reduce((sum, item) => {
+                    const value = instLots(item, key);
+                    return sum + (positive ? Math.max(value, 0) : Math.min(value, 0));
+                }, 0);
+                const kpiGroups = [
+                    ['外資及陸資', 'foreign', '國際資金進出'],
+                    ['投信', 'trust', 'ETF 換股動能'],
+                    ['自營商', 'dealer', '含避險與自行買賣'],
+                    ['三大法人合計', 'total', '全市場']
+                ];
+                const cards = [];
+                kpiGroups.forEach(([label, key, note]) => {
+                    const buy = side(key, true), sell = side(key, false);
+                    cards.push([`${label}買超`, fmtKpiAmount(buy), `${note}｜${sideLots(key, true).toLocaleString()} 張`, 'text-danger']);
+                    cards.push([`${label}賣超`, fmtKpiAmount(sell), `${note}｜${sideLots(key, false).toLocaleString()} 張`, 'text-success']);
+                });
+                kpiContainer.innerHTML = cards.map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="meta-value ${item[3]}">${item[1]}</div><div class="small text-muted mt-1">${item[2]}</div></div></div>`).join('');
             }
 
             // Top 10 投信買超
@@ -5612,6 +5677,65 @@ def main():
                 const unit = currentInstMetric === 'amount' ? '金額' : '張';
                 [['instForeignHead', `外資及陸資 (${unit})`], ['instTrustHead', `投信買賣超 (${unit})`], ['instDealerHead', `自營商買賣超 (${unit})`], ['instTotalHead', `三大法人合計 (${unit})`]].forEach(([id, text]) => { const el = document.getElementById(id); if (el) el.innerText = text; });
             }
+        }
+
+        function getInstitutionalIndustry(code) {
+            const mapped = tickerMappingData?.[code];
+            if (mapped && typeof mapped === 'object' && (mapped.industry || mapped.sector)) return mapped.industry || mapped.sector;
+            const row = (globalRawData || []).find(item => String(item.stock || '') === String(code) && item.industry);
+            return row?.industry || '未分類';
+        }
+
+        function formatAmount(n) {
+            const value = Number(n || 0);
+            return `${value >= 0 ? '+' : ''}${(value / 100000000).toFixed(2)} 億`;
+        }
+
+        function renderIndustryInstitutionalView() {
+            const body = document.getElementById('industryInstBody');
+            if (!body || !institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
+            const groups = {};
+            institutionalRaw.data.forEach(item => {
+                const industry = item.industry || item.sector || getInstitutionalIndustry(item.code);
+                if (!groups[industry]) groups[industry] = { industry, foreign: 0, trust: 0, dealer: 0, total: 0, buy: 0, sell: 0 };
+                const g = groups[industry];
+                g.foreign += instAmount(item, 'foreign');
+                g.trust += instAmount(item, 'trust');
+                g.dealer += instAmount(item, 'dealer');
+                g.total += instAmount(item, 'total');
+                if (instAmount(item, 'total') > 0) g.buy += 1;
+                if (instAmount(item, 'total') < 0) g.sell += 1;
+            });
+            window.industryInstitutionalRows = Object.values(groups).sort((a, b) => b.total - a.total);
+            const dateEl = document.getElementById('industryInstDate');
+            if (dateEl) dateEl.innerText = `交易日期：${institutionalRaw.date || '-'}`;
+            const buy = window.industryInstitutionalRows.reduce((sum, row) => sum + Math.max(row.total, 0), 0);
+            const sell = window.industryInstitutionalRows.reduce((sum, row) => sum + Math.min(row.total, 0), 0);
+            const topBuy = window.industryInstitutionalRows.find(row => row.total > 0);
+            const topSell = [...window.industryInstitutionalRows].sort((a, b) => a.total - b.total).find(row => row.total < 0);
+            const kpi = document.getElementById('industryKpiCards');
+            if (kpi) kpi.innerHTML = [
+                ['法人淨買超產業', topBuy ? topBuy.industry : '-', topBuy ? formatAmount(topBuy.total) : '-', 'text-danger'],
+                ['法人淨賣超產業', topSell ? topSell.industry : '-', topSell ? formatAmount(topSell.total) : '-', 'text-success'],
+                ['產業買超總額', formatAmount(buy), '依合計金額統計', 'text-danger'],
+                ['產業賣超總額', formatAmount(sell), '依合計金額統計', 'text-success']
+            ].map(item => `<div class="col-6 col-xl-3"><div class="meta-card"><div class="meta-label">${item[0]}</div><div class="fw-bold ${item[3]}">${item[1]}</div><div class="meta-value ${item[3]}">${item[2]}</div></div></div>`).join('');
+            applyIndustryFilter();
+        }
+
+        function applyIndustryFilter() {
+            const body = document.getElementById('industryInstBody');
+            if (!body) return;
+            const query = (document.getElementById('industrySearchInput')?.value || '').trim().toUpperCase();
+            const rows = (window.industryInstitutionalRows || []).filter(row => !query || row.industry.toUpperCase().includes(query));
+            body.innerHTML = rows.map(row => `<tr>
+                <td class="fw-bold">${row.industry}</td>
+                <td class="text-end font-monospace ${instColor(row.foreign)}">${formatAmount(row.foreign)}</td>
+                <td class="text-end font-monospace ${instColor(row.trust)}">${formatAmount(row.trust)}</td>
+                <td class="text-end font-monospace ${instColor(row.dealer)}">${formatAmount(row.dealer)}</td>
+                <td class="text-end font-monospace fw-bold ${instColor(row.total)}">${formatAmount(row.total)}</td>
+                <td class="text-end text-danger">${row.buy}</td><td class="text-end text-success">${row.sell}</td>
+            </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">無符合條件的產業資料</td></tr>';
         }
 
         // --- 7.4 發行單位數與資金流向 ---
