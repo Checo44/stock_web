@@ -45,6 +45,21 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install gspread google-auth requests pandas numpy streamlit
 
+      - name: Prepare Streamlit runtime secrets
+        run: |
+          mkdir -p .streamlit
+
+          cat > .streamlit/secrets.toml <<'EOF'
+          GOOGLE_SPREADSHEET_ID = ""
+          GEMINI_MODEL = "gemini-2.5-flash"
+          EOF
+
+      - name: Check required files
+        run: |
+          test -f app.py
+          test -f refresh_app_snapshot.py
+          test -f requirements.txt
+
       - name: Generate app snapshot
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
@@ -65,7 +80,9 @@ jobs:
           if not path.exists():
               raise SystemExit("找不到 app_snapshot.json")
 
-          data = json.loads(path.read_text(encoding="utf-8"))
+          data = json.loads(
+              path.read_text(encoding="utf-8")
+          )
 
           required = [
               "updated_at",
@@ -79,19 +96,37 @@ jobs:
               "gemini_by_etf",
           ]
 
-          missing = [key for key in required if key not in data]
+          missing = [
+              key for key in required
+              if key not in data
+          ]
+
           if missing:
-              raise SystemExit(f"快照缺少欄位：{missing}")
+              raise SystemExit(
+                  f"快照缺少欄位：{missing}"
+              )
 
           try:
-              history = json.loads(data["json_data"])
+              history = json.loads(
+                  data["json_data"]
+              )
           except Exception as exc:
-              raise SystemExit(f"json_data 格式錯誤：{exc}")
+              raise SystemExit(
+                  f"json_data 格式錯誤：{exc}"
+              )
 
           if not isinstance(history, list):
-              raise SystemExit("json_data 必須是 list")
+              raise SystemExit(
+                  "json_data 必須是 list"
+              )
+
+          if len(history) == 0:
+              raise SystemExit(
+                  "ETF History 沒有資料，拒絕提交空白快照"
+              )
 
           crawler = data["crawler"]
+
           crawler_keys = [
               "discount",
               "dividend",
@@ -109,15 +144,13 @@ jobs:
                   f"crawler 缺少資料：{missing_crawler}"
               )
 
-          if len(history) == 0:
-              raise SystemExit(
-                  "ETF History 沒有資料，拒絕提交空白快照"
-              )
-
           print("app_snapshot.json 驗證成功")
           print("更新時間：", data["updated_at"])
           print("ETF History 筆數：", len(history))
-          print("Gemini 單檔摘要數：", len(data["gemini_by_etf"]))
+          print(
+              "Gemini 單檔摘要數：",
+              len(data["gemini_by_etf"]),
+          )
           PY
 
       - name: Commit app snapshot
