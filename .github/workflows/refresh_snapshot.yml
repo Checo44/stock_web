@@ -1,11 +1,9 @@
 name: Refresh ETF App Snapshot
 
 on:
-  # 每日更新專案完成 Google Sheets 更新後觸發
   repository_dispatch:
     types: [sheets-updated]
 
-  # GitHub Actions 頁面手動執行
   workflow_dispatch:
 
 permissions:
@@ -54,6 +52,15 @@ jobs:
           GEMINI_MODEL = "gemini-2.5-flash"
           EOF
 
+      - name: Check required secrets
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          if [ -z "$GOOGLE_CREDENTIALS" ]; then
+            echo "錯誤：缺少 GOOGLE_CREDENTIALS"
+            exit 1
+          fi
+
       - name: Check required files
         run: |
           test -f app.py
@@ -69,20 +76,57 @@ jobs:
         run: |
           python -u refresh_app_snapshot.py
 
-      - name: Validate snapshot data
+      - name: Compress app snapshot
         run: |
           python - <<'PY'
+          import gzip
+          from pathlib import Path
+
+          source = Path("app_snapshot.json")
+          target = Path("app_snapshot.json.gz")
+
+          if not source.exists():
+              raise SystemExit("找不到 app_snapshot.json")
+
+          with source.open("rb") as source_file:
+              with gzip.open(
+                  target,
+                  "wb",
+                  compresslevel=9,
+              ) as target_file:
+                  target_file.writelines(source_file)
+
+          source.unlink()
+
+          size_mb = target.stat().st_size / 1024 / 1024
+          print(f"壓縮後大小：{size_mb:.2f} MB")
+
+          if target.stat().st_size >= 100 * 1024 * 1024:
+              raise SystemExit(
+                  "壓縮後仍超過 GitHub 100 MB 限制"
+              )
+          PY
+
+      - name: Validate compressed snapshot
+        run: |
+          python - <<'PY'
+          import gzip
           import json
           from pathlib import Path
 
-          path = Path("app_snapshot.json")
+          path = Path("app_snapshot.json.gz")
 
           if not path.exists():
-              raise SystemExit("找不到 app_snapshot.json")
+              raise SystemExit(
+                  "找不到 app_snapshot.json.gz"
+              )
 
-          data = json.loads(
-              path.read_text(encoding="utf-8")
-          )
+          with gzip.open(
+              path,
+              "rt",
+              encoding="utf-8",
+          ) as file:
+              data = json.load(file)
 
           required = [
               "updated_at",
@@ -106,14 +150,7 @@ jobs:
                   f"快照缺少欄位：{missing}"
               )
 
-          try:
-              history = json.loads(
-                  data["json_data"]
-              )
-          except Exception as exc:
-              raise SystemExit(
-                  f"json_data 格式錯誤：{exc}"
-              )
+          history = json.loads(data["json_data"])
 
           if not isinstance(history, list):
               raise SystemExit(
@@ -125,8 +162,6 @@ jobs:
                   "ETF History 沒有資料，拒絕提交空白快照"
               )
 
-          crawler = data["crawler"]
-
           crawler_keys = [
               "discount",
               "dividend",
@@ -136,7 +171,7 @@ jobs:
 
           missing_crawler = [
               key for key in crawler_keys
-              if key not in crawler
+              if key not in data["crawler"]
           ]
 
           if missing_crawler:
@@ -144,7 +179,7 @@ jobs:
                   f"crawler 缺少資料：{missing_crawler}"
               )
 
-          print("app_snapshot.json 驗證成功")
+          print("app_snapshot.json.gz 驗證成功")
           print("更新時間：", data["updated_at"])
           print("ETF History 筆數：", len(history))
           print(
@@ -153,15 +188,15 @@ jobs:
           )
           PY
 
-      - name: Commit app snapshot
+      - name: Commit compressed snapshot
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add app_snapshot.json
+          git add -A app_snapshot.json app_snapshot.json.gz
 
           if git diff --cached --quiet; then
-            echo "app_snapshot.json 沒有變化"
+            echo "app_snapshot.json.gz 沒有變化"
           else
             git commit -m "Refresh ETF app snapshot"
             git push
@@ -175,7 +210,7 @@ jobs:
           if [ -n "$DISCORD_WEBHOOK" ]; then
             curl -sS -X POST "$DISCORD_WEBHOOK" \
               -H "Content-Type: application/json" \
-              -d '{"content":"✅ ETF 網頁快照更新完成\napp_snapshot.json 已產生並提交"}'
+              -d '{"content":"✅ ETF 網頁快照更新完成\napp_snapshot.json.gz 已產生並提交"}'
           fi
 
       - name: Notify Discord - 更新失敗
