@@ -2,6 +2,7 @@ import os
 import re
 import json
 import ast
+import gzip
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -60,6 +61,7 @@ SPREADSHEET_ID = (
 )
 APP_REFRESH_MODE = os.environ.get("APP_REFRESH_MODE", "").strip() == "1"
 SNAPSHOT_FILE = Path(__file__).resolve().with_name("app_snapshot.json")
+SNAPSHOT_GZIP_FILE = Path(__file__).resolve().with_name("app_snapshot.json.gz")
 WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
@@ -1172,12 +1174,20 @@ def load_crawler_data():
 
 
 def load_dashboard_snapshot():
-    """讀取排程產生的完整快照；正常網頁啟動不連線 Sheets。"""
-    if not SNAPSHOT_FILE.exists():
-        return None, f"找不到快照檔：{SNAPSHOT_FILE.name}"
+    """優先讀取壓縮快照；正常網頁啟動不連線 Sheets。"""
     try:
-        with SNAPSHOT_FILE.open("r", encoding="utf-8") as file:
-            snapshot = json.load(file)
+        if SNAPSHOT_GZIP_FILE.exists():
+            with gzip.open(SNAPSHOT_GZIP_FILE, "rt", encoding="utf-8") as file:
+                snapshot = json.load(file)
+        elif SNAPSHOT_FILE.exists():
+            with SNAPSHOT_FILE.open("r", encoding="utf-8") as file:
+                snapshot = json.load(file)
+        else:
+            return None, (
+                f"找不到 {SNAPSHOT_GZIP_FILE.name} "
+                f"或 {SNAPSHOT_FILE.name}"
+            )
+
         required = {"json_data", "ticker_map", "etf_name_map", "price_history", "crawler"}
         missing = required.difference(snapshot)
         if missing:
@@ -1206,7 +1216,12 @@ def main():
         json_data = "[]"
         ticker_map, etf_name_map, price_history = {}, {}, {}
         twse_live_market = {}
-        discount_data, dividend_data, institutional_data, shares_flow_data = load_crawler_data()
+        # 正常網頁啟動不再連線 Google Sheets，也不依賴本機 crawler JSON。
+        # 請由 refresh_app_snapshot.py 先產生完整快照。
+        discount_data = {}
+        dividend_data = {}
+        institutional_data = {}
+        shares_flow_data = {}
         gemini_insight = "目前沒有可用的資料快照，請先執行 refresh_app_snapshot.py。"
         gemini_by_etf = {}
         print(snapshot_error)
