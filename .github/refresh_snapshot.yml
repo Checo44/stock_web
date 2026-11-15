@@ -1,0 +1,157 @@
+name: Refresh ETF App Snapshot
+
+on:
+  # 每日更新專案完成 Google Sheets 更新後觸發
+  repository_dispatch:
+    types: [sheets-updated]
+
+  # GitHub Actions 頁面手動執行
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-etf-app-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh_snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Notify Discord - 開始更新
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            curl -sS -X POST "$DISCORD_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"content":"🚀 ETF 網頁快照開始更新\n來源：refresh_app_snapshot.py"}'
+          fi
+
+      - name: Checkout Web project
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install gspread google-auth requests pandas numpy streamlit
+
+      - name: Generate app snapshot
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -u refresh_app_snapshot.py
+
+      - name: Validate snapshot data
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("app_snapshot.json")
+
+          if not path.exists():
+              raise SystemExit("找不到 app_snapshot.json")
+
+          data = json.loads(path.read_text(encoding="utf-8"))
+
+          required = [
+              "updated_at",
+              "json_data",
+              "twse_live_market",
+              "ticker_map",
+              "etf_name_map",
+              "price_history",
+              "crawler",
+              "gemini_insight",
+              "gemini_by_etf",
+          ]
+
+          missing = [key for key in required if key not in data]
+          if missing:
+              raise SystemExit(f"快照缺少欄位：{missing}")
+
+          try:
+              history = json.loads(data["json_data"])
+          except Exception as exc:
+              raise SystemExit(f"json_data 格式錯誤：{exc}")
+
+          if not isinstance(history, list):
+              raise SystemExit("json_data 必須是 list")
+
+          crawler = data["crawler"]
+          crawler_keys = [
+              "discount",
+              "dividend",
+              "institutional",
+              "shares_flow",
+          ]
+
+          missing_crawler = [
+              key for key in crawler_keys
+              if key not in crawler
+          ]
+
+          if missing_crawler:
+              raise SystemExit(
+                  f"crawler 缺少資料：{missing_crawler}"
+              )
+
+          if len(history) == 0:
+              raise SystemExit(
+                  "ETF History 沒有資料，拒絕提交空白快照"
+              )
+
+          print("app_snapshot.json 驗證成功")
+          print("更新時間：", data["updated_at"])
+          print("ETF History 筆數：", len(history))
+          print("Gemini 單檔摘要數：", len(data["gemini_by_etf"]))
+          PY
+
+      - name: Commit app snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add app_snapshot.json
+
+          if git diff --cached --quiet; then
+            echo "app_snapshot.json 沒有變化"
+          else
+            git commit -m "Refresh ETF app snapshot"
+            git push
+          fi
+
+      - name: Notify Discord - 更新成功
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            curl -sS -X POST "$DISCORD_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"content":"✅ ETF 網頁快照更新完成\napp_snapshot.json 已產生並提交"}'
+          fi
+
+      - name: Notify Discord - 更新失敗
+        if: failure()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK" ]; then
+            curl -sS -X POST "$DISCORD_WEBHOOK" \
+              -H "Content-Type: application/json" \
+              -d '{"content":"❌ ETF 網頁快照更新失敗\n請查看 GitHub Actions 執行紀錄"}'
+          fi
