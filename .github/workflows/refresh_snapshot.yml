@@ -188,12 +188,19 @@ jobs:
           )
           PY
 
-      - name: Commit compressed snapshot
+      - name: Commit app snapshot
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A app_snapshot.json app_snapshot.json.gz
+          if [ -f "app_snapshot.json.gz" ]; then
+            git add app_snapshot.json.gz
+          else
+            echo "找不到 app_snapshot.json.gz"
+            exit 1
+          fi
+
+          git add -u
 
           if git diff --cached --quiet; then
             echo "app_snapshot.json.gz 沒有變化"
