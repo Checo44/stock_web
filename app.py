@@ -20,6 +20,19 @@ from datetime import datetime, timedelta
 # ==========================================
 st.set_page_config(page_title="ETF 籌碼大數據監控面板", layout="wide", initial_sidebar_state="collapsed")
 
+
+def safe_streamlit_secret(name, default=""):
+    """Streamlit Cloud 與 GitHub Actions 都可安全讀取設定。
+
+    GitHub Actions 沒有 .streamlit/secrets.toml，讀取 st.secrets
+    會直接拋出 StreamlitSecretNotFoundError，因此必須統一包住例外。
+    """
+    try:
+        value = st.secrets.get(name, default)
+        return str(value).strip() if value is not None else default
+    except Exception:
+        return default
+
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
@@ -42,9 +55,11 @@ SHEET_NAME = "ETF daily"
 # 與每日爬蟲使用同一份試算表。優先讀取部署環境設定，方便切換正式表。
 SPREADSHEET_ID = (
     os.environ.get("GOOGLE_SPREADSHEET_ID", "").strip()
-    or st.secrets.get("GOOGLE_SPREADSHEET_ID", "").strip()
+    or safe_streamlit_secret("GOOGLE_SPREADSHEET_ID")
     or "1Ue-BDdPXwXewkNWe08mf0HlN2yzF9kF2mpNvOSCgvb8"
 )
+APP_REFRESH_MODE = os.environ.get("APP_REFRESH_MODE", "").strip() == "1"
+SNAPSHOT_FILE = Path(__file__).resolve().with_name("app_snapshot.json")
 WORKSHEET_HISTORY = "ETF History"
 WORKSHEET_TICKER = "代號"      # 個股代號對照工作表
 WORKSHEET_ETF_NAME = "名稱"    # ETF名稱對照工作表
@@ -67,7 +82,10 @@ ETF_CATEGORY_MAP = {
 }
 
 # FinMind API 金鑰
-FINMIND_TOKEN = st.secrets.get("FINMIND_TOKEN", os.environ.get("FINMIND_TOKEN", ""))
+FINMIND_TOKEN = (
+    os.environ.get("FINMIND_TOKEN", "").strip()
+    or safe_streamlit_secret("FINMIND_TOKEN")
+)
 # 請在 Streamlit Secrets 設定 GEMINI_API_KEY，不要把金鑰直接提交到 GitHub。
 def get_gemini_api_key():
     try:
@@ -187,6 +205,7 @@ def get_sheets_client():
     # 本機執行時，從程式所在目錄或目前工作目錄尋找 credentials.json。
     candidate_paths = [
         Path(__file__).resolve().parent / "credentials.json",
+        Path(__file__).resolve().parent / "1016" / "credentials.json",
         Path.cwd() / "credentials.json",
     ]
     for json_path in dict.fromkeys(candidate_paths):
@@ -226,7 +245,9 @@ def init_gspread():
         )
     return None
 
-sh = init_gspread()
+# 網頁正常啟動時不連線 Google Sheets；資料由排程產生的快照提供。
+# refresh_app_snapshot.py 以 APP_REFRESH_MODE=1 啟動時才會連線更新快照。
+sh = init_gspread() if APP_REFRESH_MODE else None
 
 
 def _normalise_etf_code(value):
@@ -540,6 +561,40 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
             if value:
                 results[code] = value
     return results
+
+
+@st.cache_data(ttl=28800)
+def fetch_us_valuation_cached(stock_codes):
+    """以 Yahoo Finance 補抓美股現價、PE 與 PB；無資料時保留 0。"""
+    symbols = sorted({
+        str(code).strip().split()[0]
+        for code in stock_codes
+        if re.match(r"^[A-Za-z][A-Za-z0-9.\-]*\s+US$", str(code).strip(), re.I)
+    })
+    if not symbols:
+        return {}
+    result = {}
+    for symbol in symbols:
+        try:
+            response = requests.get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": symbol},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=12,
+            )
+            response.raise_for_status()
+            rows = response.json().get("quoteResponse", {}).get("result", [])
+            if not rows:
+                continue
+            row = rows[0]
+            result[f"{symbol} US"] = {
+                "price": float(row.get("regularMarketPrice", 0) or 0),
+                "per": float(row.get("trailingPE", row.get("forwardPE", 0)) or 0),
+                "pbr": float(row.get("priceToBook", 0) or 0),
+            }
+        except Exception as exc:
+            print(f"Yahoo 美股估值讀取失敗 {symbol}: {exc}")
+    return result
 
 
 @st.cache_data(ttl=28800)
@@ -875,9 +930,12 @@ def fetch_backend_data_to_json():
         latest_date = df['date'].max()
         unique_stocks = df['stock'].unique().tolist()
         val_map = fetch_valuation_weights_cached(unique_stocks, latest_date)
+        us_val_map = fetch_us_valuation_cached(unique_stocks)
+        val_map.update(us_val_map)
 
         df['pbr'] = df.apply(lambda row: row['pbr'] or val_map.get(row['stock'], {}).get("pbr", 0.0), axis=1)
         df['per'] = df.apply(lambda row: row['per'] or val_map.get(row['stock'], {}).get("per", 0.0), axis=1)
+        df['price'] = df.apply(lambda row: row['price'] or val_map.get(row['stock'], {}).get("price", 0.0), axis=1)
 
         latest_price_map = (
             df[df['date'] == latest_date]
@@ -886,6 +944,14 @@ def fetch_backend_data_to_json():
             .last()
             .to_dict()
         )
+        # ETF History 常沒有成分股成交價；改用「代號」工作表的最近收盤價補足，
+        # 否則 FinMind 雖然抓到股利資料，也會因股價為 0 而全部被捨棄。
+        for code in unique_stocks:
+            if safe_yield_value(latest_price_map.get(code, 0)) > 0:
+                continue
+            history = price_history.get(code, {})
+            if history:
+                latest_price_map[code] = list(history.values())[-1]
         dividend_map = fetch_dividend_policy_cached(unique_stocks, latest_price_map, latest_date)
         df['dividend_yield_5y'] = df['stock'].map(
             lambda code: dividend_map.get(code, {}).get('avg_yield_5y', 0.0)
@@ -920,12 +986,15 @@ def fetch_gemini_insight(summary_text, api_key):
         model = model.get("GEMINI_MODEL", model.get("model", "gemini-2.5-flash"))
     model = str(model).strip().strip('"').strip("'") or "gemini-2.5-flash"
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    prompt = f"""你是 ETF 資料分析助理。請根據以下歷史持股異動摘要，使用繁體中文輸出：
-1. ETF 與個股整體偏向加碼或減碼
-2. 最值得注意的個股與可能原因（只能根據資料推論，不得捏造新聞）
-3. 主動型 ETF 的共識方向
-4. 使用者還應觀察的風險與後續指標
-請用 5 到 8 個條列，最後加上「這不是投資建議」。
+    prompt = f"""你是 ETF 資料摘要助理。只能根據「資料摘要」中明確出現的代號、名稱、日期、持有股數與異動數字回答。
+禁止使用外部新聞、網路知識、基金名稱推測投資策略，也禁止補寫摘要沒有提供的原因。
+若資料不足，必須明確寫「資料不足，無法從目前資料判斷」，不可猜測。
+請使用繁體中文輸出：
+1. 資料涵蓋日期與比較日期
+2. 明確列出的主要加碼與減碼標的
+3. 若資料中明確有主動型 ETF 共識，僅摘要該共識
+4. 資料限制
+最後加上「這不是投資建議」。
 
 資料摘要：
 {summary_text}"""
@@ -973,6 +1042,31 @@ def build_gemini_summary(df):
         lines.append("ETF 持有量方向（減碼→加碼）：" + "；".join(f"{code} {int(value):+,}股" for code, value in pd.concat([etf_diff.head(6), etf_diff.tail(6)]).items()))
     etf_weight = latest.groupby("etf")["weight"].sum().sort_values(ascending=False).head(12)
     lines.append("資料中權重最高 ETF：" + "；".join(f"{code} {value:.2f}%" for code, value in etf_weight.items()))
+    return "\n".join(lines)
+
+
+def build_gemini_etf_summary(df, etf_code):
+    """只建立單一 ETF 的可追溯摘要，供 Gemini 使用；不混入其他 ETF。"""
+    if df.empty or "etf" not in df.columns:
+        return f"ETF：{etf_code}\n目前沒有可用資料。"
+    one = df[df["etf"].astype(str) == str(etf_code)].copy()
+    if one.empty:
+        return f"ETF：{etf_code}\n目前沒有可用資料。"
+    dates = sorted(one["date"].dropna().unique())
+    latest_date = dates[-1]
+    latest = one[one["date"] == latest_date]
+    lines = [f"ETF：{etf_code}", f"最新日期：{latest_date}", f"最新持股列數：{len(latest)}"]
+    top = latest.sort_values("weight", ascending=False).head(10)
+    lines.append("最新前十大持股：" + "；".join(
+        f"{row.stock} {row.name} 權重 {float(row.weight):.2f}%" for _, row in top.iterrows()
+    ))
+    if len(dates) > 1:
+        previous = one[one["date"] == dates[-2]].groupby("stock")["volume"].sum()
+        current = latest.groupby("stock")["volume"].sum()
+        diff = current.subtract(previous, fill_value=0).sort_values()
+        lines.append(f"比較日期：{dates[-2]} → {latest_date}")
+        lines.append("增加持股：" + "；".join(f"{code} {int(value):+,}股" for code, value in diff.tail(10).sort_values(ascending=False).items() if value > 0) or "無")
+        lines.append("減少持股：" + "；".join(f"{code} {int(value):+,}股" for code, value in diff.head(10).items() if value < 0) or "無")
     return "\n".join(lines)
 
 # ==========================================
@@ -1036,7 +1130,10 @@ def load_crawler_data():
     sheet_failures = []
     for key, fname in filenames.items():
         worksheet_title, root_key = CRAWLER_SHEETS[key]
-        data, sheet_error = fetch_crawler_sheet_payload(worksheet_title, root_key)
+        # 正常網頁啟動只讀取本機快照／JSON，不嘗試連線 Google Sheets。
+        data, sheet_error = (None, None)
+        if APP_REFRESH_MODE:
+            data, sheet_error = fetch_crawler_sheet_payload(worksheet_title, root_key)
         if data is None or not isinstance(data.get(root_keys[key]), list):
             sheet_failures.append(f"{worksheet_title}（{sheet_error or '資料格式不符'}）")
             data = None
@@ -1062,7 +1159,7 @@ def load_crawler_data():
             f"Google Sheets 與本機備援都沒有可用資料：{', '.join(missing)}。"
             "請確認試算表工作表、Google 憑證，以及 GitHub Actions 的 GOOGLE_CREDENTIALS Secret。"
         )
-    elif sheet_failures:
+    elif sheet_failures and APP_REFRESH_MODE:
         st.warning(
             f"部分 Google Sheets 工作表讀取失敗（{'; '.join(sheet_failures)}），目前顯示本機 JSON 備援資料。"
         )
@@ -1073,26 +1170,57 @@ def load_crawler_data():
         results["shares_flow"],
     )
 
+
+def load_dashboard_snapshot():
+    """讀取排程產生的完整快照；正常網頁啟動不連線 Sheets。"""
+    if not SNAPSHOT_FILE.exists():
+        return None, f"找不到快照檔：{SNAPSHOT_FILE.name}"
+    try:
+        with SNAPSHOT_FILE.open("r", encoding="utf-8") as file:
+            snapshot = json.load(file)
+        required = {"json_data", "ticker_map", "etf_name_map", "price_history", "crawler"}
+        missing = required.difference(snapshot)
+        if missing:
+            return None, f"快照缺少欄位：{', '.join(sorted(missing))}"
+        return snapshot, None
+    except Exception as exc:
+        return None, f"快照讀取失敗：{exc}"
+
 def main():
-    json_data, wantgoo_market_data, twse_live_market, ticker_map, etf_name_map, price_history = fetch_backend_data_to_json()
+    snapshot, snapshot_error = load_dashboard_snapshot()
+    if snapshot:
+        json_data = snapshot.get("json_data", "[]")
+        ticker_map = snapshot.get("ticker_map", {})
+        etf_name_map = snapshot.get("etf_name_map", {})
+        price_history = snapshot.get("price_history", {})
+        twse_live_market = snapshot.get("twse_live_market", {})
+        crawler = snapshot.get("crawler", {})
+        discount_data = crawler.get("discount", {})
+        dividend_data = crawler.get("dividend", {})
+        institutional_data = crawler.get("institutional", {})
+        shares_flow_data = crawler.get("shares_flow", {})
+        gemini_insight = snapshot.get("gemini_insight", "")
+        gemini_by_etf = snapshot.get("gemini_by_etf", {})
+    else:
+        # 沒有快照時仍先顯示介面，不因 Sheets 暫時失敗而卡住。
+        json_data = "[]"
+        ticker_map, etf_name_map, price_history = {}, {}, {}
+        twse_live_market = {}
+        discount_data, dividend_data, institutional_data, shares_flow_data = load_crawler_data()
+        gemini_insight = "目前沒有可用的資料快照，請先執行 refresh_app_snapshot.py。"
+        gemini_by_etf = {}
+        print(snapshot_error)
     twse_json = json.dumps(twse_live_market, ensure_ascii=False)
     ticker_json = json.dumps(ticker_map, ensure_ascii=False)
     etf_name_json = json.dumps(etf_name_map, ensure_ascii=False)
     price_history_json = json.dumps(price_history, ensure_ascii=False)
     etf_category_json = json.dumps(ETF_CATEGORY_MAP, ensure_ascii=False)
-    discount_data, dividend_data, institutional_data, shares_flow_data = load_crawler_data()
     discount_json = json.dumps(discount_data, ensure_ascii=False)
     dividend_json = json.dumps(dividend_data, ensure_ascii=False)
     institutional_json = json.dumps(institutional_data, ensure_ascii=False)
     shares_flow_json = json.dumps(shares_flow_data, ensure_ascii=False)
-    try:
-        analysis_df = pd.DataFrame(json.loads(json_data))
-        gemini_insight_json = json.dumps(
-            fetch_gemini_insight(build_gemini_summary(analysis_df), get_gemini_api_key()),
-            ensure_ascii=False,
-        )
-    except Exception as exc:
-        gemini_insight_json = json.dumps(f"Gemini 分析資料準備失敗：{exc}", ensure_ascii=False)
+    gemini_insight_json = json.dumps(gemini_insight, ensure_ascii=False)
+    gemini_by_etf_json = json.dumps(gemini_by_etf, ensure_ascii=False)
 
     html_template = """
     <!DOCTYPE html>
@@ -1392,6 +1520,7 @@ def main():
           font-weight: 500;
           border-bottom: 1px solid #dee2e6;
           padding: 10px;
+          text-align: center !important;
         }
         .home-table td {
           padding: 10px;
@@ -1411,6 +1540,13 @@ def main():
         .home-table th:nth-child(9), .home-table td:nth-child(9) { width: 10%; }
         .home-table th:nth-child(10), .home-table td:nth-child(10), .home-table th:nth-child(11), .home-table td:nth-child(11) { width: 6.5%; }
         @media (max-width: 1400px) { .home-table { min-width: 1180px; } }
+        @media (max-width: 768px) {
+          .container-fluid { padding-left: 8px !important; padding-right: 8px !important; }
+          .navbar-brand { font-size: .95rem; }
+          .home-table { min-width: 1180px; }
+          .home-table th, .home-table td { padding: 8px 6px; font-size: .82rem; }
+          .table-responsive { -webkit-overflow-scrolling: touch; }
+        }
         #content-home .card { overflow: hidden; }
         #content-home .table-responsive { border-radius: 12px; }
 
@@ -2486,7 +2622,7 @@ def main():
           <div class="custom-tab-content" id="content-k">
             <div class="card p-4 bg-light border-0 mb-4">
               <h4 class="fw-bold text-dark mb-1"><i class="bi bi-trophy-fill text-warning me-2"></i>ETF 報酬與殖利率排名</h4>
-              <div class="small text-muted">報酬依當日、5、20、60、240 個交易日分段計算；優先使用「代號」工作表或 ETF 歷史價格。殖利率使用 FinMind 近五年股利政策批次資料計算。</div>
+                <div class="small text-muted">報酬依當日、5、20、60、240 個交易日及 YTD 計算；優先使用「代號」工作表或 ETF 歷史價格。殖利率使用 FinMind 近五年股利政策批次資料計算。</div>
             </div>
             <div class="d-flex gap-2 mb-3">
               <select id="rankingCategoryFilter" class="form-select form-select-sm" style="max-width: 180px;" onchange="renderReturnYieldRanking()"><option value="all">全部分類</option><option value="主動型">主動型</option><option value="高息型">高息型</option><option value="主題型">主題型</option><option value="海外型">海外型</option><option value="市值型">市值型</option></select>
@@ -2496,7 +2632,7 @@ def main():
             <div class="row g-3 mb-4" id="rankingKpiCards"></div>
             <div class="card p-3">
               <div class="table-responsive" style="max-height: 680px; overflow: auto;">
-                <table class="table table-hover align-middle"><thead><tr><th>ETF</th><th>分類</th><th class="text-end">當日</th><th class="text-end">5日</th><th class="text-end">20日</th><th class="text-end">60日</th><th class="text-end">240日</th><th class="text-end">五年平均殖利率</th><th>資料來源</th></tr></thead><tbody id="returnRankingBody"></tbody></table>
+                <table class="table table-hover align-middle"><thead><tr><th>ETF</th><th>分類</th><th class="text-end">當日</th><th class="text-end">5日</th><th class="text-end">20日</th><th class="text-end">60日</th><th class="text-end">240日</th><th class="text-end">YTD</th><th class="text-end">五年平均殖利率</th><th>資料來源</th></tr></thead><tbody id="returnRankingBody"></tbody></table>
               </div>
             </div>
           </div>
@@ -2760,7 +2896,7 @@ def main():
               <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <div>
                   <h4 class="fw-bold text-dark mb-1"><i class="bi bi-bar-chart-steps text-warning me-2"></i>產業法人買賣超金額分析</h4>
-                  <div class="text-muted small">依三大法人日報與個股產業分類彙總；金額優先，協助辨識法人資金集中流入與流出產業。</div>
+                  <div class="text-muted small">只統計個股；產業名稱以「代號」工作表 C 欄為準。若 C 欄內容是數字代碼，頁面會原樣顯示該代碼（例如 91），不會自行猜測名稱。</div>
                 </div>
                 <span class="badge bg-white text-secondary border" id="industryInstDate">-</span>
               </div>
@@ -2892,6 +3028,7 @@ def main():
         const etfCategoryData = __ETF_CATEGORY_PLACEHOLDER__;
         const priceHistoryData = __PRICE_HISTORY_PLACEHOLDER__;
         const geminiInsight = __GEMINI_PLACEHOLDER__;
+        const geminiByEtf = __GEMINI_BY_ETF_PLACEHOLDER__;
         const discountPremiumRaw = __DISCOUNT_PLACEHOLDER__;
         const dividendCalendarRaw = __DIVIDEND_PLACEHOLDER__;
         const institutionalRaw = __INSTITUTIONAL_PLACEHOLDER__;
@@ -3171,6 +3308,14 @@ def main():
                 }
                 periods[days] = result;
             });
+            // YTD：以前一年最後交易日的收盤價為基準，符合一般市場慣例。
+            let ytdResult = null;
+            if (currentPrice > 0 && series.length) {
+                const currentYear = new Date().getFullYear();
+                const ytdBase = series.find(item => new Date(item.date).getFullYear() === currentYear);
+                if (ytdBase && ytdBase.price > 0) ytdResult = (currentPrice / ytdBase.price - 1) * 100;
+            }
+            periods.YTD = ytdResult;
 
             const snapshot = latestEtfSnapshot(etfCode).rows;
             const valid = snapshot.filter(row => isNormalStock(row.stock, row.name) && toNumber(row.weight) > 0);
@@ -3215,7 +3360,7 @@ def main():
 
             document.getElementById('returnRankingBody').innerHTML = rows.map((row, index) => {
                 const yieldText = row.weightedYield > 0 ? `${row.weightedYield.toFixed(2)}%` : '-';
-                const periodCells = [1, 5, 20, 60, 240].map(days => {
+                const periodCells = [1, 5, 20, 60, 240, 'YTD'].map(days => {
                     const value = row.periods[days];
                     const text = value === null ? '-' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
                     const color = value > 0 ? 'text-danger' : (value < 0 ? 'text-success' : 'text-secondary');
@@ -3228,7 +3373,7 @@ def main():
                     <td class="text-end text-success fw-bold">${yieldText}</td>
                     <td class="small text-muted">${row.returnSource}；最新資料 ${row.latestDate}</td>
                 </tr>`;
-            }).join('') || '<tr><td colspan="9" class="text-center text-muted">目前沒有可排名資料</td></tr>';
+            }).join('') || '<tr><td colspan="10" class="text-center text-muted">目前沒有可排名資料</td></tr>';
         }
 
         function renderBeginnerFinder() {
@@ -3839,6 +3984,10 @@ def main():
             if (activeBtn) activeBtn.classList.add('active');
 
             let mappedName = getEtfName(etfCode);
+            const geminiEtfBox = document.getElementById('geminiEtfInsight');
+            if (geminiEtfBox) {
+                geminiEtfBox.innerText = geminiByEtf[etfCode] || '目前沒有此 ETF 的快照分析資料。';
+            }
             document.getElementById('txtEtfCode').innerText = etfCode;
             document.getElementById('txtEtfName').innerText = mappedName;
             document.getElementById('etfTitleContainer').style.display = 'block';
@@ -5510,7 +5659,17 @@ def main():
             const price = Number(item?.price || item?.close || item?.last_price || twseLiveMarketData[item?.code]?.price || 0);
             return instLots(item, key) * price * 1000;
         }
-        function instValue(item, key) { return currentInstMetric === 'amount' ? instAmount(item, key) : instLots(item, key); }
+        // 三大法人合計固定依同一檔標的的三個法人欄位相加，與證交所 T86 口徑一致。
+        function instTotalAmount(item) {
+            return instAmount(item, 'foreign') + instAmount(item, 'trust') + instAmount(item, 'dealer');
+        }
+        function instTotalLots(item) {
+            return instLots(item, 'foreign') + instLots(item, 'trust') + instLots(item, 'dealer');
+        }
+        function instValue(item, key) {
+            if (key === 'total') return currentInstMetric === 'amount' ? instTotalAmount(item) : instTotalLots(item);
+            return currentInstMetric === 'amount' ? instAmount(item, key) : instLots(item, key);
+        }
         function fmtInstValue(value) {
             const n = Number(value || 0);
             if (currentInstMetric === 'amount') return `${n >= 0 ? '+' : ''}${(n / 100000000).toFixed(2)} 億`;
@@ -5552,11 +5711,11 @@ def main():
             const kpiContainer = document.getElementById('instKpiCards');
             if (kpiContainer) {
                 const side = (key, positive) => data.reduce((sum, item) => {
-                    const value = instAmount(item, key);
+                    const value = key === 'total' ? instTotalAmount(item) : instAmount(item, key);
                     return sum + (positive ? Math.max(value, 0) : Math.min(value, 0));
                 }, 0);
                 const sideLots = (key, positive) => data.reduce((sum, item) => {
-                    const value = instLots(item, key);
+                    const value = key === 'total' ? instTotalLots(item) : instLots(item, key);
                     return sum + (positive ? Math.max(value, 0) : Math.min(value, 0));
                 }, 0);
                 const kpiGroups = [
@@ -5680,7 +5839,9 @@ def main():
         }
 
         function getInstitutionalIndustry(code) {
-            const mapped = tickerMappingData?.[code];
+            const direct = tickerMappingData?.[code];
+            const mappedKey = direct ? code : Object.keys(tickerMappingData || {}).find(key => getSecurityIdentityKey(key) === getSecurityIdentityKey(code));
+            const mapped = direct || (mappedKey ? tickerMappingData[mappedKey] : null);
             if (mapped && typeof mapped === 'object' && (mapped.industry || mapped.sector)) return mapped.industry || mapped.sector;
             const row = (globalRawData || []).find(item => String(item.stock || '') === String(code) && item.industry);
             return row?.industry || '未分類';
@@ -5696,15 +5857,18 @@ def main():
             if (!body || !institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
             const groups = {};
             institutionalRaw.data.forEach(item => {
-                const industry = item.industry || item.sector || getInstitutionalIndustry(item.code);
+                // 產業法人分析只統計個股，ETF 留在三大法人明細與資金流向頁。
+                if (item.is_etf === true || String(item.code || '').startsWith('00')) return;
+                const industry = getInstitutionalIndustry(item.code) || item.industry || item.sector || '未分類';
                 if (!groups[industry]) groups[industry] = { industry, foreign: 0, trust: 0, dealer: 0, total: 0, buy: 0, sell: 0 };
                 const g = groups[industry];
                 g.foreign += instAmount(item, 'foreign');
                 g.trust += instAmount(item, 'trust');
                 g.dealer += instAmount(item, 'dealer');
-                g.total += instAmount(item, 'total');
-                if (instAmount(item, 'total') > 0) g.buy += 1;
-                if (instAmount(item, 'total') < 0) g.sell += 1;
+                const total = instTotalAmount(item);
+                g.total += total;
+                if (total > 0) g.buy += 1;
+                if (total < 0) g.sell += 1;
             });
             window.industryInstitutionalRows = Object.values(groups).sort((a, b) => b.total - a.total);
             const dateEl = document.getElementById('industryInstDate');
@@ -5882,6 +6046,7 @@ def main():
                                  .replace("__ETF_CATEGORY_PLACEHOLDER__", etf_category_json)\
                                  .replace("__PRICE_HISTORY_PLACEHOLDER__", price_history_json)\
                                  .replace("__GEMINI_PLACEHOLDER__", gemini_insight_json)\
+                                 .replace("__GEMINI_BY_ETF_PLACEHOLDER__", gemini_by_etf_json)\
                                  .replace("__DISCOUNT_PLACEHOLDER__", discount_json)\
                                  .replace("__DIVIDEND_PLACEHOLDER__", dividend_json)\
                                  .replace("__INSTITUTIONAL_PLACEHOLDER__", institutional_json)\
