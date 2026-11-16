@@ -105,9 +105,9 @@ GEMINI_API_KEY = get_gemini_api_key()
 #st.write("GEMINI_API_KEY 已讀取：", bool(GEMINI_API_KEY))
 
 try:
-    GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_MODEL = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
 except Exception:
-    GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 def clean_company_name(value):
     """清洗台股、美股及全球代號來源中的公司名稱，避免空白或特殊字元造成顯示異常。"""
@@ -992,12 +992,12 @@ def fetch_gemini_insight(summary_text, api_key):
     model = os.environ.get("GEMINI_MODEL", "")
     if not model:
         try:
-            model = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+            model = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
         except Exception:
-            model = "gemini-2.5-flash"
+            model = "gemini-3.8-flash"
     if isinstance(model, dict) or hasattr(model, "get"):
-        model = model.get("GEMINI_MODEL", model.get("model", "gemini-2.5-flash"))
-    model = str(model).strip().strip('"').strip("'") or "gemini-2.5-flash"
+        model = model.get("GEMINI_MODEL", model.get("model", "gemini-3.8-flash"))
+    model = str(model).strip().strip('"').strip("'") or "gemini-3.8-flash"
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     prompt = f"""你是 ETF 資料摘要助理。只能根據「資料摘要」中明確出現的代號、名稱、日期、持有股數與異動數字回答。
 禁止使用外部新聞、網路知識、基金名稱推測投資策略，也禁止補寫摘要沒有提供的原因。
@@ -2930,14 +2930,28 @@ def main():
             <div class="row g-3 mb-4" id="industryKpiCards"></div>
             <div class="card p-3 shadow-sm">
               <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-                <span class="fw-bold text-secondary">產業買賣超金額排行</span>
+                <span class="fw-bold text-secondary">產業買賣超金額分析</span>
                 <input type="text" id="industrySearchInput" class="form-control form-control-sm" style="max-width:220px" placeholder="搜尋產業" oninput="applyIndustryFilter()">
               </div>
-              <div class="table-responsive">
-                <table class="table table-hover align-middle">
-                  <thead class="table-light"><tr><th>產業</th><th class="text-end">外資</th><th class="text-end">投信</th><th class="text-end">自營商</th><th class="text-end">三大法人合計</th><th class="text-end">買超筆數</th><th class="text-end">賣超筆數</th></tr></thead>
-                  <tbody id="industryInstBody"></tbody>
-                </table>
+              <div class="row g-4">
+                <div class="col-lg-6">
+                  <div class="fw-bold text-danger mb-2">產業買超金額 Top 10</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                      <thead class="table-light"><tr><th>排名</th><th>產業</th><th class="text-end">估算金額</th><th class="text-end">淨股數</th></tr></thead>
+                      <tbody id="industryBuyTopBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="col-lg-6">
+                  <div class="fw-bold text-success mb-2">產業賣超金額 Top 10</div>
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                      <thead class="table-light"><tr><th>排名</th><th>產業</th><th class="text-end">估算金額</th><th class="text-end">淨股數</th></tr></thead>
+                      <tbody id="industrySellTopBody"></tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -5882,20 +5896,35 @@ def main():
         }
 
         function renderIndustryInstitutionalView() {
-            const body = document.getElementById('industryInstBody');
-            if (!body || !institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
+            if (!institutionalRaw || !Array.isArray(institutionalRaw.data)) return;
             const groups = {};
             institutionalRaw.data.forEach(item => {
                 // 產業法人分析只統計個股，ETF 留在三大法人明細與資金流向頁。
                 if (item.is_etf === true || String(item.code || '').startsWith('00')) return;
                 const industry = getInstitutionalIndustry(item.code) || item.industry || item.sector || '未分類';
-                if (!groups[industry]) groups[industry] = { industry, foreign: 0, trust: 0, dealer: 0, total: 0, buy: 0, sell: 0 };
+                if (!groups[industry]) groups[industry] = {
+                    industry,
+                    foreign: 0,
+                    trust: 0,
+                    dealer: 0,
+                    total: 0,
+                    foreignLots: 0,
+                    trustLots: 0,
+                    dealerLots: 0,
+                    totalLots: 0,
+                    buy: 0,
+                    sell: 0
+                };
                 const g = groups[industry];
                 g.foreign += instAmount(item, 'foreign');
                 g.trust += instAmount(item, 'trust');
                 g.dealer += instAmount(item, 'dealer');
+                g.foreignLots += instLots(item, 'foreign');
+                g.trustLots += instLots(item, 'trust');
+                g.dealerLots += instLots(item, 'dealer');
                 const total = instTotalAmount(item);
                 g.total += total;
+                g.totalLots += instTotalLots(item);
                 if (total > 0) g.buy += 1;
                 if (total < 0) g.sell += 1;
             });
@@ -5917,18 +5946,20 @@ def main():
         }
 
         function applyIndustryFilter() {
-            const body = document.getElementById('industryInstBody');
-            if (!body) return;
             const query = (document.getElementById('industrySearchInput')?.value || '').trim().toUpperCase();
             const rows = (window.industryInstitutionalRows || []).filter(row => !query || row.industry.toUpperCase().includes(query));
-            body.innerHTML = rows.map(row => `<tr>
+            const buyBody = document.getElementById('industryBuyTopBody');
+            const sellBody = document.getElementById('industrySellTopBody');
+            const rowHtml = (row, index, isSell) => `<tr>
+                <td><span class="rank-medal medal-${index < 3 ? index + 1 : 'other'}">${index + 1}</span></td>
                 <td class="fw-bold">${row.industry}</td>
-                <td class="text-end font-monospace ${instColor(row.foreign)}">${formatAmount(row.foreign)}</td>
-                <td class="text-end font-monospace ${instColor(row.trust)}">${formatAmount(row.trust)}</td>
-                <td class="text-end font-monospace ${instColor(row.dealer)}">${formatAmount(row.dealer)}</td>
-                <td class="text-end font-monospace fw-bold ${instColor(row.total)}">${formatAmount(row.total)}</td>
-                <td class="text-end text-danger">${row.buy}</td><td class="text-end text-success">${row.sell}</td>
-            </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">無符合條件的產業資料</td></tr>';
+                <td class="text-end font-monospace fw-bold ${isSell ? 'text-success' : 'text-danger'}">${formatAmount(row.total)}</td>
+                <td class="text-end font-monospace">${row.totalLots > 0 ? '+' : ''}${row.totalLots.toLocaleString()} 股</td>
+            </tr>`;
+            const buyRows = rows.filter(row => row.total > 0).sort((a, b) => b.total - a.total).slice(0, 10);
+            const sellRows = rows.filter(row => row.total < 0).sort((a, b) => a.total - b.total).slice(0, 10);
+            if (buyBody) buyBody.innerHTML = buyRows.map((row, index) => rowHtml(row, index, false)).join('') || '<tr><td colspan="4" class="text-center text-muted py-4">無買超產業</td></tr>';
+            if (sellBody) sellBody.innerHTML = sellRows.map((row, index) => rowHtml(row, index, true)).join('') || '<tr><td colspan="4" class="text-center text-muted py-4">無賣超產業</td></tr>';
         }
 
         // --- 7.4 發行單位數與資金流向 ---
