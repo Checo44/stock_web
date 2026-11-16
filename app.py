@@ -513,12 +513,12 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
     params = {"dataset": "TaiwanStockPER", "start_date": start_date_str, "end_date": date_str}
     if FINMIND_TOKEN:
         params["token"] = FINMIND_TOKEN
+    result = {}
     try:
         response = requests.get(url, params=params, timeout=20)
         response.raise_for_status()
         records = response.json().get("data", [])
         requested = {str(code).strip() for code in stock_codes}
-        result = {}
         for record in records:
             code = str(record.get("stock_id", record.get("data_id", ""))).strip()
             if code not in requested:
@@ -527,8 +527,6 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
                 "pbr": float(record.get("PBR", record.get("pbr", 0.0)) or 0.0),
                 "per": float(record.get("PER", record.get("per", 0.0)) or 0.0),
             }
-        if result:
-            return result
     except Exception as exc:
         print(f"FinMind 批次估值無結果，改用個股補查：{exc}")
 
@@ -555,9 +553,10 @@ def fetch_valuation_weights_cached(stock_codes, date_str):
         except Exception:
             return code, None
 
-    results = {}
+    results = dict(result)
+    missing_codes = [code for code in valid_stocks if code not in results]
     with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = [executor.submit(fetch_one, code) for code in valid_stocks]
+        futures = [executor.submit(fetch_one, code) for code in missing_codes]
         for future in as_completed(futures):
             code, value = future.result()
             if value:
@@ -928,46 +927,58 @@ def fetch_backend_data_to_json():
         if quote_name and (not etf_name_map.get(code) or etf_name_map[code] == "未知名稱"):
             etf_name_map[code] = quote_name
     
+    latest_date = df['date'].max()
+    unique_stocks = df['stock'].dropna().unique().tolist()
+
+    # 估值與殖利率分開處理；其中一個 API 失敗時，不得清空另一個已取得的結果。
     try:
-        latest_date = df['date'].max()
-        unique_stocks = df['stock'].unique().tolist()
         val_map = fetch_valuation_weights_cached(unique_stocks, latest_date)
-        us_val_map = fetch_us_valuation_cached(unique_stocks)
-        val_map.update(us_val_map)
+        val_map.update(fetch_us_valuation_cached(unique_stocks))
+        df['pbr'] = df.apply(
+            lambda row: row['pbr'] or val_map.get(row['stock'], {}).get("pbr", 0.0),
+            axis=1,
+        )
+        df['per'] = df.apply(
+            lambda row: row['per'] or val_map.get(row['stock'], {}).get("per", 0.0),
+            axis=1,
+        )
+        df['price'] = df.apply(
+            lambda row: row['price'] or val_map.get(row['stock'], {}).get("price", 0.0),
+            axis=1,
+        )
+    except Exception as exc:
+        print(f"估值資料讀取失敗，保留既有欄位：{exc}")
 
-        df['pbr'] = df.apply(lambda row: row['pbr'] or val_map.get(row['stock'], {}).get("pbr", 0.0), axis=1)
-        df['per'] = df.apply(lambda row: row['per'] or val_map.get(row['stock'], {}).get("per", 0.0), axis=1)
-        df['price'] = df.apply(lambda row: row['price'] or val_map.get(row['stock'], {}).get("price", 0.0), axis=1)
-
+    try:
         latest_price_map = (
             df[df['date'] == latest_date]
-            .sort_values('date')
             .groupby('stock')['price']
             .last()
             .to_dict()
         )
-        # ETF History 常沒有成分股成交價；改用「代號」工作表的最近收盤價補足，
-        # 否則 FinMind 雖然抓到股利資料，也會因股價為 0 而全部被捨棄。
         for code in unique_stocks:
             if safe_yield_value(latest_price_map.get(code, 0)) > 0:
                 continue
             history = price_history.get(code, {})
             if history:
-                latest_price_map[code] = list(history.values())[-1]
-        dividend_map = fetch_dividend_policy_cached(unique_stocks, latest_price_map, latest_date)
+                latest_price_map[code] = history[sorted(history)[-1]]
+
+        dividend_map = fetch_dividend_policy_cached(
+            unique_stocks,
+            latest_price_map,
+            latest_date,
+        )
         df['dividend_yield_5y'] = df['stock'].map(
             lambda code: dividend_map.get(code, {}).get('avg_yield_5y', 0.0)
         ).fillna(0.0)
-        # 若 History/代號本身沒有殖利率，才使用 FinMind 五年平均殖利率補值。
         df['yield'] = df.apply(
             lambda row: row['yield'] if row['yield'] > 0 else row['dividend_yield_5y'],
             axis=1,
         )
-    except Exception as e:
-        print(f"FinMind 數據併入失敗: {e}")
-        df['pbr'] = 0.0
-        df['per'] = 0.0
-        df['dividend_yield_5y'] = 0.0
+    except Exception as exc:
+        print(f"殖利率資料讀取失敗，保留既有欄位：{exc}")
+        if 'dividend_yield_5y' not in df.columns:
+            df['dividend_yield_5y'] = 0.0
     
     records = df.to_dict(orient="records")
     return json.dumps(records, ensure_ascii=False), {}, twse_live_market, ticker_map, etf_name_map, price_history
@@ -4001,7 +4012,10 @@ def main():
             let mappedName = getEtfName(etfCode);
             const geminiEtfBox = document.getElementById('geminiEtfInsight');
             if (geminiEtfBox) {
-                geminiEtfBox.innerText = geminiByEtf[etfCode] || '目前沒有此 ETF 的快照分析資料。';
+                geminiEtfBox.innerText = geminiByEtf[etfCode]
+                    || (String(etfCode).toUpperCase().endsWith('A')
+                        ? '目前沒有此 ETF 的快照分析資料。'
+                        : 'Gemini 摘要只針對代號以 A 結尾的 ETF。');
             }
             document.getElementById('txtEtfCode').innerText = etfCode;
             document.getElementById('txtEtfName').innerText = mappedName;
@@ -5672,7 +5686,7 @@ def main():
                 if (item && item[field] !== undefined && item[field] !== null && item[field] !== '') return Number(item[field]) || 0;
             }
             const price = Number(item?.price || item?.close || item?.last_price || twseLiveMarketData[item?.code]?.price || 0);
-            return instLots(item, key) * price * 1000;
+            return instLots(item, key) * price;
         }
         // 三大法人合計固定依同一檔標的的三個法人欄位相加，與證交所 T86 口徑一致。
         function instTotalAmount(item) {
