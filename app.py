@@ -5694,13 +5694,30 @@ def main():
         let currentInstMetric = 'amount';
 
         function instLots(item, key) { return Number(item?.[`${key}_lots`] || 0); }
+        function instShares(item, key) {
+            return Number(item?.[`${key}_shares`] || 0);
+        }
         function instAmount(item, key) {
+            // 法人金額固定使用「變動股數 × ETF History 均價」。
+            // 不使用 lots，避免金額小 1,000 倍。
+            const shares = instShares(item, key);
+            const price = Number(
+                item?.average_price
+                || item?.price
+                || item?.close
+                || item?.last_price
+                || twseLiveMarketData[item?.code]?.price
+                || 0
+            );
+            if (shares !== 0 || item?.[`${key}_shares`] !== undefined) {
+                return shares * price;
+            }
+            // 舊快照相容：若尚未有 shares，才讀取既有 amount；不再以 lots 估算。
             const candidates = [`${key}_amount`, `${key}_value`, `${key}_amt`];
             for (const field of candidates) {
                 if (item && item[field] !== undefined && item[field] !== null && item[field] !== '') return Number(item[field]) || 0;
             }
-            const price = Number(item?.price || item?.close || item?.last_price || twseLiveMarketData[item?.code]?.price || 0);
-            return instLots(item, key) * price;
+            return 0;
         }
         // 三大法人合計固定依同一檔標的的三個法人欄位相加，與證交所 T86 口徑一致。
         function instTotalAmount(item) {
@@ -5708,6 +5725,12 @@ def main():
         }
         function instTotalLots(item) {
             return instLots(item, 'foreign') + instLots(item, 'trust') + instLots(item, 'dealer');
+        }
+        function instTotalShares(item) {
+            if (item?.total_shares !== undefined && item?.total_shares !== null) {
+                return Number(item.total_shares) || 0;
+            }
+            return instShares(item, 'foreign') + instShares(item, 'trust') + instShares(item, 'dealer');
         }
         function instValue(item, key) {
             if (key === 'total') return currentInstMetric === 'amount' ? instTotalAmount(item) : instTotalLots(item);
@@ -5912,6 +5935,7 @@ def main():
                     trustLots: 0,
                     dealerLots: 0,
                     totalLots: 0,
+                    totalShares: 0,
                     buy: 0,
                     sell: 0
                 };
@@ -5925,6 +5949,7 @@ def main():
                 const total = instTotalAmount(item);
                 g.total += total;
                 g.totalLots += instTotalLots(item);
+                g.totalShares += instTotalShares(item);
                 if (total > 0) g.buy += 1;
                 if (total < 0) g.sell += 1;
             });
@@ -5954,7 +5979,7 @@ def main():
                 <td><span class="rank-medal medal-${index < 3 ? index + 1 : 'other'}">${index + 1}</span></td>
                 <td class="fw-bold">${row.industry}</td>
                 <td class="text-end font-monospace fw-bold ${isSell ? 'text-success' : 'text-danger'}">${formatAmount(row.total)}</td>
-                <td class="text-end font-monospace">${row.totalLots > 0 ? '+' : ''}${row.totalLots.toLocaleString()} 股</td>
+                <td class="text-end font-monospace">${row.totalShares > 0 ? '+' : ''}${row.totalShares.toLocaleString()} 股</td>
             </tr>`;
             const buyRows = rows.filter(row => row.total > 0).sort((a, b) => b.total - a.total).slice(0, 10);
             const sellRows = rows.filter(row => row.total < 0).sort((a, b) => a.total - b.total).slice(0, 10);
